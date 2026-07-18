@@ -11,10 +11,11 @@ const WALK = 4.2, RUN = 8.4;  // 이동 속도 (m/s)
 const GRAVITY = 22, JUMP_V = 7.6;
 const WALL_H = 5;             // 벽 높이
 const FLOOR_HEIGHT = 5.2;     // 층간 높이(슬래브 포함)
-const STAIR = Object.freeze({
+const PRIMARY_STAIR = Object.freeze({
   xMin: 3.35, xMax: 6.05,
   zBottom: 10.4, zTop: 1.8,
 });
+const stairways = [PRIMARY_STAIR];
 const T = 0.4;                // 벽 두께
 const HALL_W = 12;            // 전시실 폭
 const DOOR_W = 4, DOOR_H = 3.2;
@@ -445,50 +446,76 @@ function cylinderBetween(a, b, radius, material) {
   return mesh;
 }
 
-function buildStaircase() {
+function stairOpening(stair) {
+  return {
+    xMin: stair.xMin - 0.12, xMax: stair.xMax + 0.12,
+    zMin: stair.zTop - 0.25, zMax: stair.zBottom + 0.25,
+  };
+}
+
+function rectsAroundOpenings(xMin, xMax, zMin, zMax, openings) {
+  const clipped = openings.map(opening => ({
+    xMin: Math.max(xMin, opening.xMin), xMax: Math.min(xMax, opening.xMax),
+    zMin: Math.max(zMin, opening.zMin), zMax: Math.min(zMax, opening.zMax),
+  })).filter(opening => opening.xMin < opening.xMax && opening.zMin < opening.zMax);
+  const xs = [...new Set([xMin, xMax, ...clipped.flatMap(o => [o.xMin, o.xMax])])].sort((a, b) => a - b);
+  const zs = [...new Set([zMin, zMax, ...clipped.flatMap(o => [o.zMin, o.zMax])])].sort((a, b) => a - b);
+  const rects = [];
+  for (let xi = 0; xi < xs.length - 1; xi++) {
+    for (let zi = 0; zi < zs.length - 1; zi++) {
+      const xa = xs[xi], xb = xs[xi + 1], za = zs[zi], zb = zs[zi + 1];
+      const cx = (xa + xb) / 2, cz = (za + zb) / 2;
+      if (clipped.some(o => cx > o.xMin && cx < o.xMax && cz > o.zMin && cz < o.zMax)) continue;
+      rects.push([xa, xb, za, zb]);
+    }
+  }
+  return rects;
+}
+
+function buildStaircase(stair) {
   const steps = 26;
-  const width = STAIR.xMax - STAIR.xMin;
-  const run = STAIR.zBottom - STAIR.zTop;
+  const width = stair.xMax - stair.xMin;
+  const run = stair.zBottom - stair.zTop;
   const depth = run / steps;
   const rise = FLOOR_HEIGHT / steps;
-  const centerX = (STAIR.xMin + STAIR.xMax) / 2;
+  const centerX = (stair.xMin + stair.xMax) / 2;
   const stepMat = new THREE.MeshStandardMaterial({ color: 0xd8d5ce, roughness: 0.72, metalness: 0.03 });
 
   for (let i = 0; i < steps; i++) {
     const top = rise * (i + 1);
     const step = new THREE.Mesh(new THREE.BoxGeometry(width, top, depth + 0.012), stepMat);
-    step.position.set(centerX, top / 2, STAIR.zBottom - depth * (i + 0.5));
+    step.position.set(centerX, top / 2, stair.zBottom - depth * (i + 0.5));
     scene.add(step);
   }
 
   // 계단 양옆 난간과 손잡이
   const railMat = new THREE.MeshStandardMaterial({ color: 0x2b2d30, roughness: 0.35, metalness: 0.65 });
-  for (const x of [STAIR.xMin, STAIR.xMax]) {
+  for (const x of [stair.xMin, stair.xMax]) {
     cylinderBetween(
-      new THREE.Vector3(x, 1.0, STAIR.zBottom),
-      new THREE.Vector3(x, FLOOR_HEIGHT + 1.0, STAIR.zTop),
+      new THREE.Vector3(x, 1.0, stair.zBottom),
+      new THREE.Vector3(x, FLOOR_HEIGHT + 1.0, stair.zTop),
       0.045, railMat
     );
     for (let i = 0; i <= 6; i++) {
       const p = i / 6;
       const base = p * FLOOR_HEIGHT;
-      const z = STAIR.zBottom - run * p;
+      const z = stair.zBottom - run * p;
       cylinderBetween(new THREE.Vector3(x, base + 0.05, z), new THREE.Vector3(x, base + 1.0, z), 0.028, railMat);
     }
   }
 
   // 중간에서 옆으로 떨어지지 않도록 층별 충돌 난간을 둔다.
-  const railZ = (STAIR.zBottom + STAIR.zTop) / 2;
+  const railZ = (stair.zBottom + stair.zTop) / 2;
   for (const floor of [0, 1]) {
-    addCollider(STAIR.xMin - 0.08, railZ, 0.16, run, floor);
-    addCollider(STAIR.xMax + 0.08, railZ, 0.16, run, floor);
+    addCollider(stair.xMin - 0.08, railZ, 0.16, run, floor);
+    addCollider(stair.xMax + 0.08, railZ, 0.16, run, floor);
   }
 
   const stairSign = textPlane([
-    { text: 'STAIRS · 2F', size: 0.14, weight: 600, spacing: 0.035, color: '#f1efe9' },
+    { text: stair.label || 'STAIRS · 2F', size: 0.14, weight: 600, spacing: 0.035, color: '#f1efe9' },
     { text: 'DAY 3 · DAY 4', size: 0.08, color: '#c8c4bb' },
   ], 1.5, 0.7, { bg: '#2b2d30' });
-  stairSign.position.set(STAIR.xMax + 0.75, 1.45, STAIR.zBottom + 0.04);
+  stairSign.position.set(stair.xMax + 0.75, 1.45, stair.zBottom + 0.04);
   scene.add(stairSign);
 }
 
@@ -523,6 +550,14 @@ function buildMuseum(manifest) {
     }
   }
   const roomDefs = floorDefs.flat();
+  // Day 2 순환 동선의 끝(남쪽 입구 부근)에서 2층 Day 3 북쪽 랜딩으로 연결한다.
+  stairways.length = 1;
+  stairways.push({
+    xMin: 1.45, xMax: 4.15,
+    zBottom: dayDefs[1].zFrom - 1.0,
+    zTop: dayDefs[1].zFrom - 8.0,
+    label: 'NEXT · DAY 3',
+  });
 
   /* ── 층별 바닥과 2층 슬래브 ── */
   for (const defs of floorDefs) {
@@ -535,16 +570,10 @@ function buildMuseum(manifest) {
       map: floorTexI, roughness: 0.3, metalness: 0.06, envMapIntensity: 0.85,
     });
     const fullZMin = zEnd - 4, fullZMax = 18;
-    const opening = {
-      xMin: STAIR.xMin - 0.12, xMax: STAIR.xMax + 0.12,
-      zMin: STAIR.zTop - 0.25, zMax: STAIR.zBottom + 0.25,
-    };
-    const rects = defs[0].floor === 0 ? [[-12, 12, fullZMin, fullZMax]] : [
-      [-12, opening.xMin, fullZMin, fullZMax],
-      [opening.xMax, 12, fullZMin, fullZMax],
-      [opening.xMin, opening.xMax, fullZMin, opening.zMin],
-      [opening.xMin, opening.xMax, opening.zMax, fullZMax],
-    ];
+    const openings = stairways.map(stairOpening);
+    const rects = defs[0].floor === 0
+      ? [[-12, 12, fullZMin, fullZMax]]
+      : rectsAroundOpenings(-12, 12, fullZMin, fullZMax, openings);
     const slabMat = defs[0].floor === 1 ? concreteMat(6, totalL / 4) : null;
     for (const [x1, x2, z1, z2] of rects) {
       const width = x2 - x1, depth = z2 - z1;
@@ -568,7 +597,7 @@ function buildMuseum(manifest) {
   sand.rotation.x = -Math.PI / 2; sand.position.y = -0.02;
   scene.add(sand);
 
-  buildStaircase();
+  for (const stair of stairways) buildStaircase(stair);
 
   for (const def of roomDefs) {
     const { W, L, zFrom, zTo } = def;
@@ -578,25 +607,15 @@ function buildMuseum(manifest) {
     scene.add(roomGroup);
     def.group = roomGroup;
 
-    // 1층 로비 천장에는 계단실 개구부를 남긴다.
+    // 1층의 각 방 천장에는 겹치는 계단실 개구부를 남긴다.
     const ceilMat = new THREE.MeshBasicMaterial({ color: 0xdedcd7, side: THREE.BackSide });
-    if (def.type === 'lobby' && def.floor === 0) {
-      const xEdge = W / 2 + T;
-      const x1 = STAIR.xMin - 0.12, x2 = STAIR.xMax + 0.12;
-      const z1 = STAIR.zTop - 0.25, z2 = STAIR.zBottom + 0.25;
-      const ceilingRects = [
-        [-xEdge, x1, zTo, zFrom], [x2, xEdge, zTo, zFrom],
-        [x1, x2, zTo, z1], [x1, x2, z2, zFrom],
-      ];
-      for (const [xa, xb, za, zb] of ceilingRects) {
-        const ceil = new THREE.Mesh(new THREE.PlaneGeometry(xb - xa, zb - za), ceilMat);
-        ceil.rotation.x = -Math.PI / 2;
-        ceil.position.set((xa + xb) / 2, yBase + WALL_H - 0.005, (za + zb) / 2);
-        scene.add(ceil);
-      }
-    } else {
-      const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W + T * 2, L), ceilMat);
-      ceil.rotation.x = -Math.PI / 2; ceil.position.set(0, yBase + WALL_H - 0.005, cz);
+    const xEdge = W / 2 + T;
+    const ceilingOpenings = def.floor === 0 ? stairways.map(stairOpening) : [];
+    const ceilingRects = rectsAroundOpenings(-xEdge, xEdge, zTo, zFrom, ceilingOpenings);
+    for (const [xa, xb, za, zb] of ceilingRects) {
+      const ceil = new THREE.Mesh(new THREE.PlaneGeometry(xb - xa, zb - za), ceilMat);
+      ceil.rotation.x = -Math.PI / 2;
+      ceil.position.set((xa + xb) / 2, yBase + WALL_H - 0.005, (za + zb) / 2);
       scene.add(ceil);
     }
     // 천장 조명 스트립 (자체발광)
@@ -826,9 +845,13 @@ function updateFloorNav(floor) {
 
 function stairProgressAt(x, z) {
   const margin = 0.2;
-  if (x < STAIR.xMin - margin || x > STAIR.xMax + margin
-      || z > STAIR.zBottom + margin || z < STAIR.zTop - margin) return null;
-  return Math.max(0, Math.min(1, (STAIR.zBottom - z) / (STAIR.zBottom - STAIR.zTop)));
+  for (const stair of stairways) {
+    if (x < stair.xMin - margin || x > stair.xMax + margin
+        || z > stair.zBottom + margin || z < stair.zTop - margin) continue;
+    return Math.max(0, Math.min(1,
+      (stair.zBottom - z) / (stair.zBottom - stair.zTop)));
+  }
+  return null;
 }
 
 function switchFloor(floor, announce = true) {

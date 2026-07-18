@@ -11,6 +11,10 @@ const WALK = 4.2, RUN = 8.4;  // 이동 속도 (m/s)
 const GRAVITY = 22, JUMP_V = 7.6;
 const WALL_H = 5;             // 벽 높이
 const FLOOR_HEIGHT = 5.2;     // 층간 높이(슬래브 포함)
+const STAIR = Object.freeze({
+  xMin: 3.35, xMax: 6.05,
+  zBottom: 10.4, zTop: 1.8,
+});
 const T = 0.4;                // 벽 두께
 const HALL_W = 12;            // 전시실 폭
 const DOOR_W = 4, DOOR_H = 3.2;
@@ -432,6 +436,62 @@ const rooms = []; // {floor, elevation, label, zFrom(남,큰z), zTo(북,작은z)
 let spawnPoint = new THREE.Vector3(0, EYE, 10);
 const floorSpawnPoints = [];
 
+function cylinderBetween(a, b, radius, material) {
+  const direction = new THREE.Vector3().subVectors(b, a);
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, direction.length(), 10), material);
+  mesh.position.copy(a).add(b).multiplyScalar(0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+  scene.add(mesh);
+  return mesh;
+}
+
+function buildStaircase() {
+  const steps = 26;
+  const width = STAIR.xMax - STAIR.xMin;
+  const run = STAIR.zBottom - STAIR.zTop;
+  const depth = run / steps;
+  const rise = FLOOR_HEIGHT / steps;
+  const centerX = (STAIR.xMin + STAIR.xMax) / 2;
+  const stepMat = new THREE.MeshStandardMaterial({ color: 0xd8d5ce, roughness: 0.72, metalness: 0.03 });
+
+  for (let i = 0; i < steps; i++) {
+    const top = rise * (i + 1);
+    const step = new THREE.Mesh(new THREE.BoxGeometry(width, top, depth + 0.012), stepMat);
+    step.position.set(centerX, top / 2, STAIR.zBottom - depth * (i + 0.5));
+    scene.add(step);
+  }
+
+  // 계단 양옆 난간과 손잡이
+  const railMat = new THREE.MeshStandardMaterial({ color: 0x2b2d30, roughness: 0.35, metalness: 0.65 });
+  for (const x of [STAIR.xMin, STAIR.xMax]) {
+    cylinderBetween(
+      new THREE.Vector3(x, 1.0, STAIR.zBottom),
+      new THREE.Vector3(x, FLOOR_HEIGHT + 1.0, STAIR.zTop),
+      0.045, railMat
+    );
+    for (let i = 0; i <= 6; i++) {
+      const p = i / 6;
+      const base = p * FLOOR_HEIGHT;
+      const z = STAIR.zBottom - run * p;
+      cylinderBetween(new THREE.Vector3(x, base + 0.05, z), new THREE.Vector3(x, base + 1.0, z), 0.028, railMat);
+    }
+  }
+
+  // 중간에서 옆으로 떨어지지 않도록 층별 충돌 난간을 둔다.
+  const railZ = (STAIR.zBottom + STAIR.zTop) / 2;
+  for (const floor of [0, 1]) {
+    addCollider(STAIR.xMin - 0.08, railZ, 0.16, run, floor);
+    addCollider(STAIR.xMax + 0.08, railZ, 0.16, run, floor);
+  }
+
+  const stairSign = textPlane([
+    { text: 'STAIRS · 2F', size: 0.14, weight: 600, spacing: 0.035, color: '#f1efe9' },
+    { text: 'DAY 3 · DAY 4', size: 0.08, color: '#c8c4bb' },
+  ], 1.5, 0.7, { bg: '#2b2d30' });
+  stairSign.position.set(STAIR.xMax + 0.75, 1.45, STAIR.zBottom + 0.04);
+  scene.add(stairSign);
+}
+
 function buildMuseum(manifest) {
   const byDay = [[], [], [], []];
   for (const it of manifest.items) byDay[it.day - 1].push(it);
@@ -471,17 +531,32 @@ function buildMuseum(manifest) {
     const totalL = 14 - zEnd;
     const floorTexI = floorTex.clone(); floorTexI.needsUpdate = true;
     floorTexI.repeat.set(16 / 4, totalL / 4);
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(24, totalL + 8),
-      new THREE.MeshStandardMaterial({ map: floorTexI, roughness: 0.3, metalness: 0.06, envMapIntensity: 0.85 })
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, yBase + 0.001, (14 + zEnd) / 2);
-    scene.add(floor);
-    if (defs[0].floor === 1) {
-      const slab = new THREE.Mesh(new THREE.BoxGeometry(24, 0.2, totalL + 8), concreteMat(6, totalL / 4));
-      slab.position.set(0, yBase - 0.1, (14 + zEnd) / 2);
-      scene.add(slab);
+    const floorMat = new THREE.MeshStandardMaterial({
+      map: floorTexI, roughness: 0.3, metalness: 0.06, envMapIntensity: 0.85,
+    });
+    const fullZMin = zEnd - 4, fullZMax = 18;
+    const opening = {
+      xMin: STAIR.xMin - 0.12, xMax: STAIR.xMax + 0.12,
+      zMin: STAIR.zTop - 0.25, zMax: STAIR.zBottom + 0.25,
+    };
+    const rects = defs[0].floor === 0 ? [[-12, 12, fullZMin, fullZMax]] : [
+      [-12, opening.xMin, fullZMin, fullZMax],
+      [opening.xMax, 12, fullZMin, fullZMax],
+      [opening.xMin, opening.xMax, fullZMin, opening.zMin],
+      [opening.xMin, opening.xMax, opening.zMax, fullZMax],
+    ];
+    const slabMat = defs[0].floor === 1 ? concreteMat(6, totalL / 4) : null;
+    for (const [x1, x2, z1, z2] of rects) {
+      const width = x2 - x1, depth = z2 - z1;
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), floorMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set((x1 + x2) / 2, yBase + 0.001, (z1 + z2) / 2);
+      scene.add(floor);
+      if (slabMat) {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(width, 0.2, depth), slabMat);
+        slab.position.set((x1 + x2) / 2, yBase - 0.1, (z1 + z2) / 2);
+        scene.add(slab);
+      }
     }
   }
 
@@ -493,6 +568,8 @@ function buildMuseum(manifest) {
   sand.rotation.x = -Math.PI / 2; sand.position.y = -0.02;
   scene.add(sand);
 
+  buildStaircase();
+
   for (const def of roomDefs) {
     const { W, L, zFrom, zTo } = def;
     const yBase = def.elevation;
@@ -501,11 +578,27 @@ function buildMuseum(manifest) {
     scene.add(roomGroup);
     def.group = roomGroup;
 
-    // 천장
-    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W + T * 2, L),
-      new THREE.MeshBasicMaterial({ color: 0xdedcd7, side: THREE.BackSide }));
-    ceil.rotation.x = -Math.PI / 2; ceil.position.set(0, yBase + WALL_H - 0.005, cz);
-    scene.add(ceil);
+    // 1층 로비 천장에는 계단실 개구부를 남긴다.
+    const ceilMat = new THREE.MeshBasicMaterial({ color: 0xdedcd7, side: THREE.BackSide });
+    if (def.type === 'lobby' && def.floor === 0) {
+      const xEdge = W / 2 + T;
+      const x1 = STAIR.xMin - 0.12, x2 = STAIR.xMax + 0.12;
+      const z1 = STAIR.zTop - 0.25, z2 = STAIR.zBottom + 0.25;
+      const ceilingRects = [
+        [-xEdge, x1, zTo, zFrom], [x2, xEdge, zTo, zFrom],
+        [x1, x2, zTo, z1], [x1, x2, z2, zFrom],
+      ];
+      for (const [xa, xb, za, zb] of ceilingRects) {
+        const ceil = new THREE.Mesh(new THREE.PlaneGeometry(xb - xa, zb - za), ceilMat);
+        ceil.rotation.x = -Math.PI / 2;
+        ceil.position.set((xa + xb) / 2, yBase + WALL_H - 0.005, (za + zb) / 2);
+        scene.add(ceil);
+      }
+    } else {
+      const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W + T * 2, L), ceilMat);
+      ceil.rotation.x = -Math.PI / 2; ceil.position.set(0, yBase + WALL_H - 0.005, cz);
+      scene.add(ceil);
+    }
     // 천장 조명 스트립 (자체발광)
     const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.8, L - 2),
       new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }));
@@ -725,6 +818,19 @@ const hintEl = document.getElementById('hint');
 const touchUIEl = document.getElementById('touchUI');
 const floorNavEl = document.getElementById('floorNav');
 
+function updateFloorNav(floor) {
+  for (const button of floorNavEl.querySelectorAll('button')) {
+    button.setAttribute('aria-pressed', String(Number(button.dataset.floor) === floor));
+  }
+}
+
+function stairProgressAt(x, z) {
+  const margin = 0.2;
+  if (x < STAIR.xMin - margin || x > STAIR.xMax + margin
+      || z > STAIR.zBottom + margin || z < STAIR.zTop - margin) return null;
+  return Math.max(0, Math.min(1, (STAIR.zBottom - z) / (STAIR.zBottom - STAIR.zTop)));
+}
+
 function switchFloor(floor, announce = true) {
   const target = floorSpawnPoints[floor];
   if (!target || player.floor === floor && player.pos.distanceToSquared(target) < 0.01) return;
@@ -733,9 +839,7 @@ function switchFloor(floor, announce = true) {
   player.velY = 0; player.onGround = true;
   camera.position.copy(player.pos);
   camera.rotation.set(player.pitch, player.yaw, 0);
-  for (const button of floorNavEl.querySelectorAll('button')) {
-    button.setAttribute('aria-pressed', String(Number(button.dataset.floor) === floor));
-  }
+  updateFloorNav(floor);
   lastRoomCheck = -1e9;
   updateRooms(performance.now());
   if (announce) {
@@ -1210,6 +1314,7 @@ function updatePlayer(dt) {
   const mz = (iz * cos - ix * sin) * speed * dt;
   player.pos.x += mx;
   player.pos.z += mz;
+  resolveCollisions();
 
   // 점프 / 중력
   if ((keys['Space']) && player.onGround) {
@@ -1217,12 +1322,21 @@ function updatePlayer(dt) {
   }
   player.velY -= GRAVITY * dt;
   player.pos.y += player.velY * dt;
-  const groundEye = EYE + player.floor * FLOOR_HEIGHT;
+  const stairProgress = stairProgressAt(player.pos.x, player.pos.z);
+  let groundBase = player.floor * FLOOR_HEIGHT;
+  if (stairProgress !== null) {
+    groundBase = stairProgress * FLOOR_HEIGHT;
+    const stairFloor = stairProgress >= 0.5 ? 1 : 0;
+    if (stairFloor !== player.floor) {
+      player.floor = stairFloor;
+      updateFloorNav(player.floor);
+      lastRoomCheck = -1e9;
+    }
+  }
+  const groundEye = EYE + groundBase;
   if (player.pos.y <= groundEye) {
     player.pos.y = groundEye; player.velY = 0; player.onGround = true;
   }
-
-  resolveCollisions();
 
   camera.position.copy(player.pos);
   camera.rotation.set(player.pitch, player.yaw, 0);

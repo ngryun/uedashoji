@@ -10,6 +10,7 @@ const RADIUS = 0.38;          // 플레이어 충돌 반경
 const WALK = 4.2, RUN = 8.4;  // 이동 속도 (m/s)
 const GRAVITY = 22, JUMP_V = 7.6;
 const WALL_H = 5;             // 벽 높이
+const FLOOR_HEIGHT = 5.2;     // 층간 높이(슬래브 포함)
 const T = 0.4;                // 벽 두께
 const HALL_W = 12;            // 전시실 폭
 const DOOR_W = 4, DOOR_H = 3.2;
@@ -174,22 +175,22 @@ const aoMat = new THREE.MeshBasicMaterial({ map: vGradTex, transparent: true, de
 const shadowMat = new THREE.MeshBasicMaterial({ map: rGradTex, transparent: true, depthWrite: false, toneMapped: false, opacity: 0.8 });
 
 // 벽 밑 AO (벽면에 세로로)
-function aoWall(cx, cz, len, rotY, h = 0.6) {
+function aoWall(cx, cz, len, rotY, h = 0.6, yBase = 0) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(len, h), aoMat);
-  m.position.set(cx, h / 2 + 0.002, cz); m.rotation.y = rotY;
+  m.position.set(cx, yBase + h / 2 + 0.002, cz); m.rotation.y = rotY;
   m.renderOrder = 2; scene.add(m); return m;
 }
 // 바닥 AO (벽에서 멀어지며 옅어짐) — rotZ: 진한 모서리 방향 (π/2=동, -π/2=서, 0=남, π=북)
-function aoFloor(cx, cz, len, rotZ, d = 0.5) {
+function aoFloor(cx, cz, len, rotZ, d = 0.5, yBase = 0) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(len, d), aoMat);
   m.rotation.set(-Math.PI / 2, 0, rotZ);
-  m.position.set(cx, 0.004, cz);
+  m.position.set(cx, yBase + 0.004, cz);
   m.renderOrder = 2; scene.add(m); return m;
 }
 // 걸레받이
-function baseboard(cx, cz, len, alongX) {
+function baseboard(cx, cz, len, alongX, yBase = 0) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(alongX ? len : 0.05, 0.09, alongX ? 0.05 : len), darkMat);
-  m.position.set(cx, 0.045, cz); scene.add(m); return m;
+  m.position.set(cx, yBase + 0.045, cz); scene.add(m); return m;
 }
 
 /* ═══════════════════ 텍스트 캔버스 플레인 ═══════════════════ */
@@ -220,36 +221,36 @@ function textPlane(lines, w, h, opt = {}) {
 
 /* ═══════════════════ 충돌 ═══════════════════ */
 const colliders = []; // {minX,maxX,minZ,maxZ}
-function addCollider(cx, cz, sx, sz) {
-  colliders.push({ minX: cx - sx / 2, maxX: cx + sx / 2, minZ: cz - sz / 2, maxZ: cz + sz / 2 });
+function addCollider(cx, cz, sx, sz, floor = 0) {
+  colliders.push({ minX: cx - sx / 2, maxX: cx + sx / 2, minZ: cz - sz / 2, maxZ: cz + sz / 2, floor });
 }
-function wallBox(cx, cy, cz, sx, sy, sz, mat, collide = true) {
+function wallBox(cx, cy, cz, sx, sy, sz, mat, collide = true, floor = 0) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
   m.position.set(cx, cy, cz);
   scene.add(m);
-  if (collide) addCollider(cx, cz, sx, sz);
+  if (collide) addCollider(cx, cz, sx, sz, floor);
   return m;
 }
 // 문(개구부) 있는 가로벽: z 위치에, x 범위 [xa, xb]
-function dividerWall(z, xa, xb, mat) {
+function dividerWall(z, xa, xb, mat, floor = 0, yBase = 0) {
   const doorL = -DOOR_W / 2, doorR = DOOR_W / 2;
   const segs = [];
   if (doorL - xa > 0.01) segs.push([xa, doorL]);
   if (xb - doorR > 0.01) segs.push([doorR, xb]);
   for (const [a, b] of segs) {
-    wallBox((a + b) / 2, WALL_H / 2, z, b - a, WALL_H, T, mat);
+    wallBox((a + b) / 2, yBase + WALL_H / 2, z, b - a, WALL_H, T, mat, true, floor);
   }
   // 문 위 인방(lintel)
-  wallBox(0, (DOOR_H + WALL_H) / 2, z, DOOR_W, WALL_H - DOOR_H, T, mat, false);
+  wallBox(0, yBase + (DOOR_H + WALL_H) / 2, z, DOOR_W, WALL_H - DOOR_H, T, mat, false, floor);
   // 문틀(리빌): 벽면과 동일 평면이 생기지 않도록 벽을 1cm씩 파고들게 배치 (z-fighting 방지)
   for (const dx of [-1, 1]) {
     const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.16, DOOR_H + 0.07, T + 0.1), darkMat);
-    jamb.position.set(dx * (DOOR_W / 2 + 0.07), (DOOR_H + 0.07) / 2, z);
+    jamb.position.set(dx * (DOOR_W / 2 + 0.07), yBase + (DOOR_H + 0.07) / 2, z);
     scene.add(jamb);
-    addCollider(dx * (DOOR_W / 2 + 0.07), z, 0.16, T + 0.1);
+    addCollider(dx * (DOOR_W / 2 + 0.07), z, 0.16, T + 0.1, floor);
   }
   const head = new THREE.Mesh(new THREE.BoxGeometry(DOOR_W + 0.3, 0.16, T + 0.1), darkMat);
-  head.position.set(0, DOOR_H + 0.03, z);
+  head.position.set(0, yBase + DOOR_H + 0.03, z);
   scene.add(head);
 }
 
@@ -427,45 +428,62 @@ function enforcePhotoBudget() {
 }
 
 /* ═══════════════════ 미술관 건축 ═══════════════════ */
-const rooms = []; // {label, zFrom(남,큰z), zTo(북,작은z), W, group}
+const rooms = []; // {floor, elevation, label, zFrom(남,큰z), zTo(북,작은z), W, group}
 let spawnPoint = new THREE.Vector3(0, EYE, 10);
+const floorSpawnPoints = [];
 
 function buildMuseum(manifest) {
   const byDay = [[], [], [], []];
   for (const it of manifest.items) byDay[it.day - 1].push(it);
   const dayShort = ['7/12', '7/13', '7/14', '7/15'];
 
-  /* ── 방 크기 계산 ── */
-  const roomDefs = [{ type: 'lobby', W: 16, L: 14, label: 'ENTRANCE HALL' }];
-  byDay.forEach((items, i) => {
+  const dayDefs = byDay.map((items, i) => {
     const count = items.length;
     const usePartition = count > 34;
     const lines = usePartition ? 4 : 2;
     const L = Math.max(12, Math.ceil((count / lines) * SPACING + 6));
-    roomDefs.push({ type: 'hall', day: i + 1, W: HALL_W, L, usePartition,
-                    label: manifest.days[i], items });
+    const floor = i < 2 ? 0 : 1;
+    return { type: 'hall', day: i + 1, floor, elevation: floor * FLOOR_HEIGHT,
+      W: HALL_W, L, usePartition, label: `${floor + 1}F · ${manifest.days[i]}`, items };
   });
 
-  /* ── 배치 (로비 남쪽 z=14에서 북쪽 -z 방향으로) ── */
-  let zFrom = 14;
-  for (const def of roomDefs) {
-    def.zFrom = zFrom;
-    def.zTo = zFrom - def.L;
-    zFrom = def.zTo;
+  /* ── 1층과 2층을 같은 평면 위에 쌓아 배치 ── */
+  const floorDefs = [
+    [{ type: 'lobby', floor: 0, elevation: 0, W: 16, L: 14, label: '1F · ENTRANCE HALL' },
+      dayDefs[0], dayDefs[1]],
+    [{ type: 'lobby', floor: 1, elevation: FLOOR_HEIGHT, upper: true,
+       W: 16, L: 14, label: '2F · UPPER HALL' }, dayDefs[2], dayDefs[3]],
+  ];
+  for (const defs of floorDefs) {
+    let floorZ = 14;
+    for (const def of defs) {
+      def.zFrom = floorZ;
+      def.zTo = floorZ - def.L;
+      floorZ = def.zTo;
+    }
   }
-  const zEnd = zFrom;
+  const roomDefs = floorDefs.flat();
 
-  /* ── 바닥 / 천장 / 외벽 ── */
-  const totalL = 14 - zEnd;
-  const floorTexI = floorTex.clone(); floorTexI.needsUpdate = true;
-  floorTexI.repeat.set(16 / 4, totalL / 4);
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(24, totalL + 8),
-    new THREE.MeshStandardMaterial({ map: floorTexI, roughness: 0.3, metalness: 0.06, envMapIntensity: 0.85 })
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.set(0, 0.001, (14 + zEnd) / 2);
-  scene.add(floor);
+  /* ── 층별 바닥과 2층 슬래브 ── */
+  for (const defs of floorDefs) {
+    const yBase = defs[0].elevation;
+    const zEnd = defs[defs.length - 1].zTo;
+    const totalL = 14 - zEnd;
+    const floorTexI = floorTex.clone(); floorTexI.needsUpdate = true;
+    floorTexI.repeat.set(16 / 4, totalL / 4);
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(24, totalL + 8),
+      new THREE.MeshStandardMaterial({ map: floorTexI, roughness: 0.3, metalness: 0.06, envMapIntensity: 0.85 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(0, yBase + 0.001, (14 + zEnd) / 2);
+    scene.add(floor);
+    if (defs[0].floor === 1) {
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(24, 0.2, totalL + 8), concreteMat(6, totalL / 4));
+      slab.position.set(0, yBase - 0.1, (14 + zEnd) / 2);
+      scene.add(slab);
+    }
+  }
 
   // 외부 지면(모래 — 우에다 사구 오마주)
   const sand = new THREE.Mesh(
@@ -477,6 +495,7 @@ function buildMuseum(manifest) {
 
   for (const def of roomDefs) {
     const { W, L, zFrom, zTo } = def;
+    const yBase = def.elevation;
     const cz = (zFrom + zTo) / 2;
     const roomGroup = new THREE.Group();
     scene.add(roomGroup);
@@ -485,85 +504,99 @@ function buildMuseum(manifest) {
     // 천장
     const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W + T * 2, L),
       new THREE.MeshBasicMaterial({ color: 0xdedcd7, side: THREE.BackSide }));
-    ceil.rotation.x = -Math.PI / 2; ceil.position.set(0, WALL_H - 0.005, cz); // 벽 상단면과 동일 평면 회피
+    ceil.rotation.x = -Math.PI / 2; ceil.position.set(0, yBase + WALL_H - 0.005, cz);
     scene.add(ceil);
     // 천장 조명 스트립 (자체발광)
     const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.8, L - 2),
       new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }));
-    strip.rotation.x = Math.PI / 2; strip.position.set(0, WALL_H - 0.05, cz);
+    strip.rotation.x = Math.PI / 2; strip.position.set(0, yBase + WALL_H - 0.05, cz);
     scene.add(strip);
     const glow = new THREE.Mesh(new THREE.PlaneGeometry(4.5, L - 2), glowMat);
-    glow.rotation.x = Math.PI / 2; glow.position.set(0, WALL_H - 0.28, cz);
+    glow.rotation.x = Math.PI / 2; glow.position.set(0, yBase + WALL_H - 0.28, cz);
     glow.renderOrder = 3; scene.add(glow);
 
     if (def.type === 'lobby') {
       // 서쪽 벽(타이틀) — 양끝을 남쪽 벽/칸막이 속으로 살짝 밀어넣어 동일 평면 회피
-      wallBox(-W / 2 - T / 2, WALL_H / 2, cz, T, WALL_H, L + 0.2, concreteMat(L / 4, WALL_H / 4));
+      wallBox(-W / 2 - T / 2, yBase + WALL_H / 2, cz, T, WALL_H, L + 0.2,
+        concreteMat(L / 4, WALL_H / 4), true, def.floor);
       // 남쪽 벽
-      wallBox(0, WALL_H / 2, zFrom + T / 2, W + T * 2, WALL_H, T, concreteMat(W / 4, WALL_H / 4));
+      wallBox(0, yBase + WALL_H / 2, zFrom + T / 2, W + T * 2, WALL_H, T,
+        concreteMat(W / 4, WALL_H / 4), true, def.floor);
       // 동쪽: 유리벽 (하단 60cm 콘크리트 + 유리)
-      wallBox(W / 2 + T / 2, 0.3, cz, T, 0.6, L + 0.2, concreteMat(L / 4, 0.5), false);
+      wallBox(W / 2 + T / 2, yBase + 0.3, cz, T, 0.6, L + 0.2,
+        concreteMat(L / 4, 0.5), false, def.floor);
       const glass = new THREE.Mesh(new THREE.BoxGeometry(0.06, WALL_H - 0.6, L + 0.2),
         new THREE.MeshPhysicalMaterial({ color: 0xdfeef2, transparent: true, opacity: 0.14,
           roughness: 0.05, metalness: 0, side: THREE.DoubleSide }));
-      glass.position.set(W / 2 + T / 2, (WALL_H - 0.6) / 2 + 0.6, cz);
+      glass.position.set(W / 2 + T / 2, yBase + (WALL_H - 0.6) / 2 + 0.6, cz);
       scene.add(glass);
-      addCollider(W / 2 + T / 2, cz, T, L);
+      addCollider(W / 2 + T / 2, cz, T, L, def.floor);
       // 유리 멀리언(기둥)
       for (let i = 0; i <= 4; i++) {
         const mz = zTo + (L / 4) * i;
-        wallBox(W / 2 + T / 2, WALL_H / 2, mz, 0.12, WALL_H, 0.12, darkMat, false);
+        wallBox(W / 2 + T / 2, yBase + WALL_H / 2, mz, 0.12, WALL_H, 0.12,
+          darkMat, false, def.floor);
       }
       // 타이틀 벽 텍스트
-      const title = textPlane([
+      const titleLines = def.upper ? [
+        { text: '2F GALLERY', size: 0.32, weight: 500, spacing: 0.08, color: '#2f2f2d' },
+        { text: 'DAY 3 · DAY 4', size: 0.18, weight: 400, spacing: 0.05, color: '#55524d' },
+        { text: '2026 국제교류', size: 0.15, color: '#77746e' },
+      ] : [
         { text: '요나고미나미고등학교 × 설악고등학교', size: 0.24, weight: 300, spacing: 0.025, color: '#2f2f2d' },
         { text: '2026 국제교류', size: 0.22, weight: 500, spacing: 0.04, color: '#45423e' },
         { text: 'YONAGO MINAMI HIGH SCHOOL × SEORAK HIGH SCHOOL', size: 0.075, color: '#77746e' },
         { text: '2026. 7. 12 – 15', size: 0.12, color: '#55524d' },
-      ], 7, 2.4);
-      title.position.set(-W / 2 + 0.01, 2.5, cz);
+      ];
+      const title = textPlane(titleLines, 7, 2.4);
+      title.position.set(-W / 2 + 0.01, yBase + 2.5, cz);
       title.rotation.y = Math.PI / 2;
       scene.add(title);
 
-      // 외부: 수면 (미술관 앞 수면 오마주)
-      const water = new THREE.Mesh(new THREE.PlaneGeometry(26, L + 6),
-        new THREE.MeshStandardMaterial({ color: 0xb9d3da, roughness: 0.04, metalness: 0.85, envMapIntensity: 1.3 }));
-      water.rotation.x = -Math.PI / 2;
-      water.position.set(W / 2 + 14, 0.06, cz);
-      scene.add(water);
+      if (!def.upper) {
+        // 외부: 수면 (미술관 앞 수면 오마주)
+        const water = new THREE.Mesh(new THREE.PlaneGeometry(26, L + 6),
+          new THREE.MeshStandardMaterial({ color: 0xb9d3da, roughness: 0.04, metalness: 0.85, envMapIntensity: 1.3 }));
+        water.rotation.x = -Math.PI / 2;
+        water.position.set(W / 2 + 14, 0.06, cz);
+        scene.add(water);
 
-      // 외부: 다이센 배경 사진
-      new THREE.TextureLoader().load('assets/backdrop.jpg', (t) => {
-        t.colorSpace = THREE.SRGBColorSpace;
-        const bp = new THREE.Mesh(new THREE.PlaneGeometry(84, 63),
-          new THREE.MeshBasicMaterial({ map: t, fog: true, toneMapped: false }));
-        bp.position.set(W / 2 + 88, 2.4, cz); // 지평선을 눈높이 부근에
+        // 외부: 다이센 배경 사진
+        new THREE.TextureLoader().load('assets/backdrop.jpg', (t) => {
+          t.colorSpace = THREE.SRGBColorSpace;
+          const bp = new THREE.Mesh(new THREE.PlaneGeometry(84, 63),
+            new THREE.MeshBasicMaterial({ map: t, fog: true, toneMapped: false }));
+          bp.position.set(W / 2 + 88, 2.4, cz);
+          bp.rotation.y = -Math.PI / 2;
+          scene.add(bp);
+        });
+      }
 
-        bp.rotation.y = -Math.PI / 2;
-        scene.add(bp);
-      });
-
-      spawnPoint = new THREE.Vector3(0, EYE, zFrom - 3);
+      floorSpawnPoints[def.floor] = new THREE.Vector3(0, yBase + EYE, zFrom - 3);
+      if (def.floor === 0) spawnPoint = floorSpawnPoints[0].clone();
     } else {
       // 전시실 좌우 외벽 — 칸막이 벽 중심선까지만 (끝면이 칸막이 내부에 묻히도록, z-fighting 방지)
-      const extS = (def === roomDefs[roomDefs.length - 1]) ? 0.3 : 0; // 마지막 방은 북쪽 벽 속으로 연장
-      wallBox(-W / 2 - T / 2, WALL_H / 2, cz - extS / 2, T, WALL_H, L + extS, concreteMat(L / 4, WALL_H / 4));
-      wallBox(W / 2 + T / 2, WALL_H / 2, cz - extS / 2, T, WALL_H, L + extS, concreteMat(L / 4, WALL_H / 4));
+      const defs = floorDefs[def.floor];
+      const extS = (def === defs[defs.length - 1]) ? 0.3 : 0;
+      wallBox(-W / 2 - T / 2, yBase + WALL_H / 2, cz - extS / 2, T, WALL_H, L + extS,
+        concreteMat(L / 4, WALL_H / 4), true, def.floor);
+      wallBox(W / 2 + T / 2, yBase + WALL_H / 2, cz - extS / 2, T, WALL_H, L + extS,
+        concreteMat(L / 4, WALL_H / 4), true, def.floor);
       // 내측 흰 전시벽 (외벽 안쪽 면에서 2cm 띄움)
       const innerW1 = new THREE.Mesh(new THREE.PlaneGeometry(L, WALL_H), whiteWallMat);
-      innerW1.position.set(-W / 2 + 0.02, WALL_H / 2, cz); innerW1.rotation.y = Math.PI / 2;
+      innerW1.position.set(-W / 2 + 0.02, yBase + WALL_H / 2, cz); innerW1.rotation.y = Math.PI / 2;
       scene.add(innerW1);
       const innerW2 = new THREE.Mesh(new THREE.PlaneGeometry(L, WALL_H), whiteWallMat);
-      innerW2.position.set(W / 2 - 0.02, WALL_H / 2, cz); innerW2.rotation.y = -Math.PI / 2;
+      innerW2.position.set(W / 2 - 0.02, yBase + WALL_H / 2, cz); innerW2.rotation.y = -Math.PI / 2;
       scene.add(innerW2);
 
       // 벽-바닥 접합부: 걸레받이 + AO
-      baseboard(-W / 2 + 0.03, cz, L, false);
-      baseboard(W / 2 - 0.03, cz, L, false);
-      aoWall(-W / 2 + 0.034, cz, L, Math.PI / 2);
-      aoWall(W / 2 - 0.034, cz, L, -Math.PI / 2);
-      aoFloor(-W / 2 + 0.26, cz, L, -Math.PI / 2);
-      aoFloor(W / 2 - 0.26, cz, L, Math.PI / 2);
+      baseboard(-W / 2 + 0.03, cz, L, false, yBase);
+      baseboard(W / 2 - 0.03, cz, L, false, yBase);
+      aoWall(-W / 2 + 0.034, cz, L, Math.PI / 2, 0.6, yBase);
+      aoWall(W / 2 - 0.034, cz, L, -Math.PI / 2, 0.6, yBase);
+      aoFloor(-W / 2 + 0.26, cz, L, -Math.PI / 2, 0.5, yBase);
+      aoFloor(W / 2 - 0.26, cz, L, Math.PI / 2, 0.5, yBase);
 
       /* 슬롯 라인 구성 */
       const pad = 2.4;
@@ -571,7 +604,7 @@ function buildMuseum(manifest) {
       // 서쪽 벽: 남→북
       lineList.push({
         len: L - pad * 2,
-        slot: (t) => ({ x: -W / 2 + 0.03, y: 1.6, z: zFrom - pad - t, rotY: Math.PI / 2 })
+        slot: (t) => ({ x: -W / 2 + 0.03, y: yBase + 1.6, z: zFrom - pad - t, rotY: Math.PI / 2 })
       });
       if (def.usePartition) {
         const pPad = 3.4;
@@ -579,41 +612,41 @@ function buildMuseum(manifest) {
         const pCz = cz;
         // 가벽 (중앙, 높이 3.4)
         const part = new THREE.Mesh(new THREE.BoxGeometry(0.34, 3.4, pLen), whiteWallMat);
-        part.position.set(0, 1.7, pCz);
+        part.position.set(0, yBase + 1.7, pCz);
         scene.add(part);
-        addCollider(0, pCz, 0.34, pLen);
+        addCollider(0, pCz, 0.34, pLen, def.floor);
         // 가벽 상단 어두운 캡
         const cap = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.06, pLen + 0.08), darkMat);
-        cap.position.set(0, 3.42, pCz); scene.add(cap);
+        cap.position.set(0, yBase + 3.42, pCz); scene.add(cap);
         // 가벽 접합부 AO + 걸레받이
-        baseboard(-0.2, pCz, pLen, false);
-        baseboard(0.2, pCz, pLen, false);
-        aoWall(-0.185, pCz, pLen, -Math.PI / 2);
-        aoWall(0.185, pCz, pLen, Math.PI / 2);
-        aoFloor(-0.43, pCz, pLen, Math.PI / 2);
-        aoFloor(0.43, pCz, pLen, -Math.PI / 2);
+        baseboard(-0.2, pCz, pLen, false, yBase);
+        baseboard(0.2, pCz, pLen, false, yBase);
+        aoWall(-0.185, pCz, pLen, -Math.PI / 2, 0.6, yBase);
+        aoWall(0.185, pCz, pLen, Math.PI / 2, 0.6, yBase);
+        aoFloor(-0.43, pCz, pLen, Math.PI / 2, 0.5, yBase);
+        aoFloor(0.43, pCz, pLen, -Math.PI / 2, 0.5, yBase);
         // 가벽 서쪽 면: 북→남 / 동쪽 면: 남→북 (관람 동선 순)
         lineList.push({ len: pLen - 0.8,
-          slot: (t) => ({ x: -0.19, y: 1.6, z: (pCz - pLen / 2 + 0.4) + t, rotY: -Math.PI / 2 }) });
+          slot: (t) => ({ x: -0.19, y: yBase + 1.6, z: (pCz - pLen / 2 + 0.4) + t, rotY: -Math.PI / 2 }) });
         lineList.push({ len: pLen - 0.8,
-          slot: (t) => ({ x: 0.19, y: 1.6, z: (pCz + pLen / 2 - 0.4) - t, rotY: Math.PI / 2 }) });
+          slot: (t) => ({ x: 0.19, y: yBase + 1.6, z: (pCz + pLen / 2 - 0.4) - t, rotY: Math.PI / 2 }) });
       } else {
         // 가벽 없는 방: 중앙 벤치 (나무 상판 + 금속 다리)
         const benchTop = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.09, 2.6), woodMat);
-        benchTop.position.set(0, 0.42, cz); scene.add(benchTop);
+        benchTop.position.set(0, yBase + 0.42, cz); scene.add(benchTop);
         for (const dz of [-1.1, 1.1]) {
           const leg = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.375, 0.08), darkMat);
-          leg.position.set(0, 0.1875, cz + dz); scene.add(leg);
+          leg.position.set(0, yBase + 0.1875, cz + dz); scene.add(leg);
         }
         const bShadow = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 3.4), shadowMat);
-        bShadow.rotation.x = -Math.PI / 2; bShadow.position.set(0, 0.006, cz);
+        bShadow.rotation.x = -Math.PI / 2; bShadow.position.set(0, yBase + 0.006, cz);
         bShadow.renderOrder = 2; scene.add(bShadow);
-        addCollider(0, cz, 0.55, 2.6);
+        addCollider(0, cz, 0.55, 2.6, def.floor);
       }
       // 동쪽 벽: 북→남
       lineList.push({
         len: L - pad * 2,
-        slot: (t) => ({ x: W / 2 - 0.03, y: 1.6, z: zTo + pad + t, rotY: -Math.PI / 2 })
+        slot: (t) => ({ x: W / 2 - 0.03, y: yBase + 1.6, z: zTo + pad + t, rotY: -Math.PI / 2 })
       });
 
       /* 작품 분배 */
@@ -629,6 +662,7 @@ function buildMuseum(manifest) {
         for (let k = 0; k < n; k++) {
           const item = items[assigned + k];
           const art = createArtwork(item, rooms.length, assigned + k + 1, dayShort[def.day - 1]);
+          art.floor = def.floor;
           placeArtwork(art, line.slot(step * (k + 0.5)));
           roomGroup.add(art.group);
         }
@@ -637,10 +671,10 @@ function buildMuseum(manifest) {
 
       // 입구 위 방 이름
       const sign = textPlane([
-        { text: `DAY ${def.day}`, size: 0.30, weight: 600, spacing: 0.10, color: '#2f2f2d' },
-        { text: def.label.replace(/^Day \d · /, ''), size: 0.15, color: '#77746e' },
+        { text: `${def.floor + 1}F · DAY ${def.day}`, size: 0.27, weight: 600, spacing: 0.08, color: '#2f2f2d' },
+        { text: def.label.replace(/^\dF · Day \d · /, ''), size: 0.15, color: '#77746e' },
       ], 3.4, 1.0);
-      sign.position.set(0, DOOR_H + 0.85, zFrom + T / 2 + 0.04);
+      sign.position.set(0, yBase + DOOR_H + 0.85, zFrom + T / 2 + 0.04);
       sign.rotation.y = 0; // 남쪽(입구쪽)에서 보이게
       scene.add(sign);
     }
@@ -648,21 +682,24 @@ function buildMuseum(manifest) {
     rooms.push(def);
   }
 
-  /* ── 방 사이 칸막이 벽 (문 포함) ── */
-  for (let i = 1; i < roomDefs.length; i++) {
-    const z = roomDefs[i].zFrom;
-    const w = Math.max(roomDefs[i - 1].W, roomDefs[i].W);
-    dividerWall(z, -w / 2 - T, w / 2 + T, concreteMat(w / 6, WALL_H / 4));
+  /* ── 각 층의 방 사이 칸막이와 북쪽 끝벽 ── */
+  for (const defs of floorDefs) {
+    for (let i = 1; i < defs.length; i++) {
+      const z = defs[i].zFrom;
+      const w = Math.max(defs[i - 1].W, defs[i].W);
+      dividerWall(z, -w / 2 - T, w / 2 + T,
+        concreteMat(w / 6, WALL_H / 4), defs[i].floor, defs[i].elevation);
+    }
+    const last = defs[defs.length - 1];
+    wallBox(0, last.elevation + WALL_H / 2, last.zTo - T / 2,
+      last.W + T * 2, WALL_H, T, concreteMat(last.W / 4, WALL_H / 4), true, last.floor);
   }
-  // 마지막 방 북쪽 벽
-  const last = roomDefs[roomDefs.length - 1];
-  wallBox(0, WALL_H / 2, zEnd - T / 2, last.W + T * 2, WALL_H, T, concreteMat(last.W / 4, WALL_H / 4));
-  // 로비 폭(16)과 전시동 폭(12) 차이 메우는 외벽은 divider가 커버함
 }
 
 /* ═══════════════════ 플레이어 / 컨트롤 ═══════════════════ */
 const player = {
   pos: new THREE.Vector3(0, EYE, 10),
+  floor: 0,
   velY: 0, onGround: true,
   yaw: 0, pitch: 0,   // 북쪽(-z)을 바라보고 시작
   running: false,
@@ -673,6 +710,9 @@ let controlsActive = false;
 document.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
+  if (!e.repeat && controlsActive && !viewerOpen && (e.code === 'Digit1' || e.code === 'Digit2')) {
+    switchFloor(e.code === 'Digit1' ? 0 : 1);
+  }
 });
 document.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -683,6 +723,33 @@ const crosshairEl = document.getElementById('crosshair');
 const roomLabelEl = document.getElementById('roomLabel');
 const hintEl = document.getElementById('hint');
 const touchUIEl = document.getElementById('touchUI');
+const floorNavEl = document.getElementById('floorNav');
+
+function switchFloor(floor, announce = true) {
+  const target = floorSpawnPoints[floor];
+  if (!target || player.floor === floor && player.pos.distanceToSquared(target) < 0.01) return;
+  player.floor = floor;
+  player.pos.copy(target);
+  player.velY = 0; player.onGround = true;
+  camera.position.copy(player.pos);
+  camera.rotation.set(player.pitch, player.yaw, 0);
+  for (const button of floorNavEl.querySelectorAll('button')) {
+    button.setAttribute('aria-pressed', String(Number(button.dataset.floor) === floor));
+  }
+  lastRoomCheck = -1e9;
+  updateRooms(performance.now());
+  if (announce) {
+    hintEl.textContent = floor === 0 ? '1층 · Day 1–2 전시' : '2층 · Day 3–4 전시';
+    hintEl.style.opacity = '1';
+  }
+}
+
+for (const button of floorNavEl.querySelectorAll('button')) {
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    switchFloor(Number(button.dataset.floor));
+  });
+}
 
 function lockPointer() {
   try {
@@ -940,7 +1007,9 @@ function closeGallery() {
 function build2DGallery(manifest) {
   galleryFilters.replaceChildren();
   galleryGrid.replaceChildren();
-  const filterDefs = [{ day: 0, label: '전체' }, ...manifest.days.map((label, i) => ({ day: i + 1, label }))];
+  const filterDefs = [{ day: 0, label: '전체' }, ...manifest.days.map((label, i) => ({
+    day: i + 1, label: `${i < 2 ? '1F' : '2F'} · ${label}`,
+  }))];
   for (const def of filterDefs) {
     const button = document.createElement('button');
     button.type = 'button'; button.textContent = def.label;
@@ -1004,13 +1073,14 @@ renderer.domElement.addEventListener('click', () => {
 
 /* ═══════════════════ 룸 매니저 (지연 로딩/컬링/비디오) ═══════════════════ */
 let currentRoomIdx = 0;
-function roomIndexAt(z) {
+function roomIndexAt(z, floor) {
   for (let i = 0; i < rooms.length; i++) {
-    if (z <= rooms[i].zFrom + 0.5 && z >= rooms[i].zTo - 0.5) return i;
+    if (rooms[i].floor === floor && z <= rooms[i].zFrom + 0.5 && z >= rooms[i].zTo - 0.5) return i;
   }
-  // 경계 밖이면 가장 가까운 방으로 (0번 고정 폴백 금지 — Day4 미표시 버그 원인)
+  // 현재 층에서 가장 가까운 방을 폴백으로 사용한다.
   let best = 0, bestD = Infinity;
   for (let i = 0; i < rooms.length; i++) {
+    if (rooms[i].floor !== floor) continue;
     const c = (rooms[i].zFrom + rooms[i].zTo) / 2;
     const d = Math.abs(z - c);
     if (d < bestD) { bestD = d; best = i; }
@@ -1021,19 +1091,20 @@ let lastRoomCheck = 0;
 function updateRooms(now) {
   if (now - lastRoomCheck < 400) return;
   lastRoomCheck = now;
-  currentRoomIdx = roomIndexAt(player.pos.z);
+  currentRoomIdx = roomIndexAt(player.pos.z, player.floor);
   roomLabelEl.textContent = rooms[currentRoomIdx] ? rooms[currentRoomIdx].label : '';
 
   for (const art of artworks) art.distanceFromPlayer = art.pos.distanceTo(player.pos);
   const loadTargets = new Set(artworks
     .filter(art => !art.isVideo
+      && art.floor === player.floor
       && Math.abs(art.roomIdx - currentRoomIdx) <= 1
       && art.distanceFromPlayer <= ART_LOAD_DISTANCE)
     .sort((a, b) => a.distanceFromPlayer - b.distanceFromPlayer)
     .slice(0, MAX_LOADED_PHOTOS));
 
   for (const art of artworks) {
-    const nearRoom = Math.abs(art.roomIdx - currentRoomIdx) <= 1;
+    const nearRoom = art.floor === player.floor && Math.abs(art.roomIdx - currentRoomIdx) <= 1;
     const distance = art.distanceFromPlayer;
     const shouldLoad = loadTargets.has(art);
     const shouldKeep = nearRoom && distance <= ART_KEEP_DISTANCE;
@@ -1058,7 +1129,7 @@ function updateRooms(now) {
 
   /* 비디오: 현재 방에서 가까운 2개만 재생 */
   const vids = artworks
-    .filter(a => a.isVideo && Math.abs(a.roomIdx - currentRoomIdx) <= 1)
+    .filter(a => a.isVideo && a.floor === player.floor && Math.abs(a.roomIdx - currentRoomIdx) <= 1)
     .map(a => ({ a, d: a.pos.distanceTo(player.pos) }))
     .sort((p, q) => p.d - q.d);
   let playing = 0;
@@ -1093,6 +1164,7 @@ function resolveCollisions() {
   const p = player.pos;
   for (let iter = 0; iter < 2; iter++) {
     for (const b of colliders) {
+      if (b.floor !== player.floor) continue;
       const cx = Math.max(b.minX, Math.min(p.x, b.maxX));
       const cz = Math.max(b.minZ, Math.min(p.z, b.maxZ));
       const dx = p.x - cx, dz = p.z - cz;
@@ -1145,8 +1217,9 @@ function updatePlayer(dt) {
   }
   player.velY -= GRAVITY * dt;
   player.pos.y += player.velY * dt;
-  if (player.pos.y <= EYE) {
-    player.pos.y = EYE; player.velY = 0; player.onGround = true;
+  const groundEye = EYE + player.floor * FLOOR_HEIGHT;
+  if (player.pos.y <= groundEye) {
+    player.pos.y = groundEye; player.velY = 0; player.onGround = true;
   }
 
   resolveCollisions();
@@ -1194,7 +1267,8 @@ loop();
 // 개발용 디버그 핸들
 window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera,
   get room() { return currentRoomIdx; },
-  tp(x, z, yaw) { player.pos.set(x, EYE, z); player.yaw = yaw; player.pitch = 0; },
+  tp(x, z, yaw) { player.pos.set(x, EYE + player.floor * FLOOR_HEIGHT, z); player.yaw = yaw; player.pitch = 0; },
+  floor(n) { switchFloor(Math.max(0, Math.min(1, n))); },
   step() { // rAF가 멈춘 환경에서 수동 프레임 진행 (테스트용)
     updatePlayer(1 / 60);
     lastRoomCheck = -1e9;

@@ -65,6 +65,17 @@
     z-index: 10; color: rgba(255,255,255,.55); font-size: 11px; letter-spacing: .12em;
     display: none; pointer-events: none; white-space: nowrap;
   }
+  #floorNav {
+    position: fixed; top: calc(14px + env(safe-area-inset-top)); right: 16px; z-index: 12;
+    display: none; gap: 6px; padding: 5px; border: 1px solid rgba(255,255,255,.2);
+    border-radius: 999px; background: rgba(20,22,26,.5); backdrop-filter: blur(8px);
+  }
+  body.playing #floorNav { display: flex; }
+  #floorNav button {
+    min-width: 58px; padding: 7px 10px; border: 0; border-radius: 999px; cursor: pointer;
+    color: rgba(255,255,255,.7); background: transparent; font-size: 11px; letter-spacing: .08em;
+  }
+  #floorNav button[aria-pressed="true"] { color: #17191d; background: #f0eee9; }
 
   /* ── 사진 확대 오버레이 ─────────────────── */
   #viewer {
@@ -157,11 +168,11 @@
   <div class="line"></div>
   <div class="help" id="helpDesktop">
     <b>W A S D</b> · 이동 &nbsp;&nbsp; <b>마우스</b> · 시점 &nbsp;&nbsp; <b>SHIFT</b> · 달리기<br>
-    <b>SPACE</b> · 점프 &nbsp;&nbsp; <b>클릭</b> · 사진 감상 &nbsp;&nbsp; <b>ESC</b> · 마우스 해제
+    <b>SPACE</b> · 점프 &nbsp;&nbsp; <b>클릭</b> · 사진 감상 &nbsp;&nbsp; <b>1 / 2</b> · 층 이동 &nbsp;&nbsp; <b>ESC</b> · 마우스 해제
   </div>
   <div class="help" id="helpTouch" style="display:none">
     <b>왼쪽 조이스틱</b> · 이동 &nbsp;&nbsp; <b>오른쪽 드래그</b> · 시점<br>
-    <b>JUMP</b> · 점프 &nbsp;&nbsp; <b>RUN</b> · 달리기 &nbsp;&nbsp; <b>사진 탭</b> · 감상
+    <b>JUMP</b> · 점프 &nbsp;&nbsp; <b>RUN</b> · 달리기 &nbsp;&nbsp; <b>1F / 2F</b> · 층 이동 &nbsp;&nbsp; <b>사진 탭</b> · 감상
   </div>
   <div id="startActions">
     <button id="enterBtn" type="button" disabled>3D 입장</button>
@@ -173,6 +184,10 @@
 <div id="crosshair" aria-hidden="true"></div>
 <div id="roomLabel" aria-live="polite"></div>
 <div id="hint" aria-live="polite"></div>
+<nav id="floorNav" aria-label="전시층 이동">
+  <button type="button" data-floor="0" aria-pressed="true">1F · 1–2일</button>
+  <button type="button" data-floor="1" aria-pressed="false">2F · 3–4일</button>
+</nav>
 
 <div id="viewer" role="dialog" aria-modal="true" aria-labelledby="viewerCap" aria-hidden="true" tabindex="-1">
   <button id="viewerClose" type="button" aria-label="확대 보기 닫기">✕</button>

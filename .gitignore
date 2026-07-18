@@ -1,0 +1,13 @@
+.DS_Store
+**/.DS_Store
+
+# Local/editor state
+.claude/
+
+# Original source media is kept locally. GitHub Pages uses assets/ only.
+img/
+assets/.source-map/
+
+# Converter and Pages build artifacts
+.manifest.*
+_site/

@@ -271,41 +271,55 @@ const frameGeo = new THREE.BoxGeometry(1, 1, 1);
 const frameMat = new THREE.MeshStandardMaterial({ color: 0x17171a, roughness: 0.35, metalness: 0.2, envMapIntensity: 0.9 });
 const bezelMat = new THREE.MeshStandardMaterial({ color: 0x0e0f11, roughness: 0.3, metalness: 0.4, envMapIntensity: 0.9 });
 const shadowGeo = new THREE.PlaneGeometry(1, 1);
+const artworkPlaneGeo = new THREE.PlaneGeometry(1, 1);
+
+function fitArtworkToAspect(art, aspect) {
+  if (!Number.isFinite(aspect) || aspect <= 0) return;
+  let pw, ph;
+  if (aspect >= 1) { pw = art.maxDim; ph = art.maxDim / aspect; }
+  else { ph = art.maxDim; pw = art.maxDim * aspect; }
+
+  const w = pw + art.matPad * 2;
+  const h = ph + art.matPad * 2;
+  art.aspect = aspect;
+  art.pw = pw; art.ph = ph;
+  art.w = w; art.h = h;
+  art.frame.scale.set(w + art.border * 2, h + art.border * 2, 0.055);
+  art.shadow.scale.set((w + art.border * 2) * 1.45, (h + art.border * 2) * 1.45, 1);
+
+  // 사진 텍스처에는 매트가 합성되어 있고, 영상은 원본 화면 비율만 사용한다.
+  art.plane.scale.set(art.isVideo ? pw : w, art.isVideo ? ph : h, 1);
+}
 
 function createArtwork(item, roomIdx, idxInDay, dayLabel) {
   const isVideo = item.type === 'video';
   const aspect = item.w / item.h;
   // 사진 영역 크기 (최대변 기준)
   const maxDim = isVideo ? 1.6 : 1.05;
-  let pw, ph;
-  if (aspect >= 1) { pw = maxDim; ph = maxDim / aspect; }
-  else { ph = maxDim; pw = maxDim * aspect; }
   const mat = isVideo ? 0.05 : 0.16;        // 매트(여백) 폭
   const border = isVideo ? 0.06 : 0.045;    // 프레임 두께
-  const w = pw + mat * 2, h = ph + mat * 2;
 
   const group = new THREE.Group();
   // 벽면 드롭섀도
   const shadow = new THREE.Mesh(shadowGeo, shadowMat);
-  shadow.scale.set((w + border * 2) * 1.45, (h + border * 2) * 1.45, 1);
   shadow.position.set(0, -0.04, 0.004);
   shadow.renderOrder = 1;
   group.add(shadow);
   // 프레임(베젤)
   const frame = new THREE.Mesh(frameGeo, isVideo ? bezelMat : frameMat);
-  frame.scale.set(w + border * 2, h + border * 2, 0.055);
   frame.position.z = 0.028;
   group.add(frame);
   // 사진/매트 합성 플레인
   const plane = new THREE.Mesh(
-    new THREE.PlaneGeometry(w, h),
+    artworkPlaneGeo,
     new THREE.MeshBasicMaterial({ map: placeholderTex, toneMapped: false })
   );
   plane.position.z = 0.06;
   group.add(plane);
 
-  const art = { item, group, plane, w, h, pw, ph, matPad: mat, isVideo, roomIdx, idxInDay, dayLabel,
+  const art = { item, group, plane, frame, shadow, border, maxDim, matPad: mat, isVideo, roomIdx, idxInDay, dayLabel,
                 loaded: false, loading: false, tex: null, video: null, vtex: null, pos: new THREE.Vector3() };
+  fitArtworkToAspect(art, aspect);
   plane.userData.art = art;
   frame.userData.art = art;
   artworks.push(art);
@@ -351,6 +365,8 @@ function pumpLoads() {
       if (!settle()) return;
       art.cancelLoad = null;
       if (!art.wanted) { pumpLoads(); return; }
+      // manifest의 메타데이터가 아니라 브라우저가 실제로 디코딩한 크기에 액자를 맞춘다.
+      fitArtworkToAspect(art, img.naturalWidth / img.naturalHeight);
       // 다운스케일 + 매트/캡션 합성
       const ratio = Math.min(1, MAX_TEX / Math.max(img.width, img.height));
       const iw = Math.round(img.width * ratio), ih = Math.round(img.height * ratio);
@@ -1052,6 +1068,9 @@ function updateRooms(now) {
         const v = document.createElement('video');
         v.src = a.item.file; v.muted = true; v.loop = true; v.playsInline = true;
         v.preload = 'auto'; v.crossOrigin = 'anonymous';
+        v.addEventListener('loadedmetadata', () => {
+          if (a.video === v) fitArtworkToAspect(a, v.videoWidth / v.videoHeight);
+        }, { once: true });
         a.video = v;
         const vt = new THREE.VideoTexture(v);
         vt.colorSpace = THREE.SRGBColorSpace;

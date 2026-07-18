@@ -1,4 +1,4 @@
-// 요나고미나미고등학교 설악고등학교 2026 국제교류 — 돗토리 여행 3D 갤러리
+// 요나고미나미고등학교 설악고등학교 2026 국제교류 — 3D 갤러리
 // Three.js 1인칭 미술관. WASD/SHIFT/SPACE + 모바일 터치 조작.
 import * as THREE from 'three';
 
@@ -519,7 +519,7 @@ function buildMuseum(manifest) {
         { text: '요나고미나미고등학교 × 설악고등학교', size: 0.24, weight: 300, spacing: 0.025, color: '#2f2f2d' },
         { text: '2026 국제교류', size: 0.22, weight: 500, spacing: 0.04, color: '#45423e' },
         { text: 'YONAGO MINAMI HIGH SCHOOL × SEORAK HIGH SCHOOL', size: 0.075, color: '#77746e' },
-        { text: '돗토리 여행  2026. 7. 12 – 15', size: 0.12, color: '#55524d' },
+        { text: '2026. 7. 12 – 15', size: 0.12, color: '#55524d' },
       ], 7, 2.4);
       title.position.set(-W / 2 + 0.01, 2.5, cz);
       title.rotation.y = Math.PI / 2;

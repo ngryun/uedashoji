@@ -602,11 +602,21 @@ function buildStaircase(stair) {
   const centerX = (stair.xMin + stair.xMax) / 2;
   const stepMat = new THREE.MeshStandardMaterial({ color: 0xd8d5ce, roughness: 0.72, metalness: 0.03 });
 
+  // 뜬 계단: 얇은 디딤판 + 양옆 경사 보(스트링거)만 남겨 계단 아래가 트여 보이게 한다.
+  const treadT = 0.09;
   for (let i = 0; i < steps; i++) {
     const top = rise * (i + 1);
-    const step = new THREE.Mesh(new THREE.BoxGeometry(width, top, depth + 0.012), stepMat);
-    step.position.set(centerX, top / 2, stair.zBottom - depth * (i + 0.5));
+    const step = new THREE.Mesh(new THREE.BoxGeometry(width, treadT, depth + 0.06), stepMat);
+    step.position.set(centerX, top - treadT / 2, stair.zBottom - depth * (i + 0.5));
     scene.add(step);
+  }
+  const slope = Math.atan2(FLOOR_HEIGHT, run);
+  const beamLen = Math.hypot(FLOOR_HEIGHT, run) + 0.3;
+  for (const x of [stair.xMin + 0.06, stair.xMax - 0.06]) {
+    const stringer = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.34, beamLen), darkMat);
+    stringer.rotation.x = slope;
+    stringer.position.set(x, FLOOR_HEIGHT / 2 - 0.26, (stair.zBottom + stair.zTop) / 2);
+    scene.add(stringer);
   }
 
   // 계단 양옆 난간과 손잡이
@@ -815,12 +825,16 @@ function buildMuseum(manifest) {
         water.position.set(W / 2 + 14, 0.06, cz);
         scene.add(water);
 
-        // 외부: 다이센 배경 사진
+        // 외부: 다이센 배경 사진 — 로비와 Day 2 창 모두에서 이어져 보이도록
+        // 1층 동쪽 전체(로비~Day 2 남단)를 한 장으로 덮는다. 가로만 늘려 이음매를 없앤다.
         new THREE.TextureLoader().load('assets/backdrop.jpg', (t) => {
           t.colorSpace = THREE.SRGBColorSpace;
-          const bp = new THREE.Mesh(new THREE.PlaneGeometry(84, 63),
+          // 유리벽에 바짝 붙어 비스듬히 볼 때도 끝이 드러나지 않게 남북으로 크게 연장한다.
+          const zEnd0 = floorDefs[0][floorDefs[0].length - 1].zTo;
+          const bpN = zEnd0 - 60, bpS = 30;
+          const bp = new THREE.Mesh(new THREE.PlaneGeometry(bpS - bpN, 63),
             new THREE.MeshBasicMaterial({ map: t, fog: true, toneMapped: false }));
-          bp.position.set(W / 2 + 88, 2.4, cz);
+          bp.position.set(W / 2 + 58, 2.4, (bpS + bpN) / 2);
           bp.rotation.y = -Math.PI / 2;
           scene.add(bp);
         });
@@ -834,15 +848,60 @@ function buildMuseum(manifest) {
       const extS = (def === defs[defs.length - 1]) ? 0.3 : 0;
       wallBox(-W / 2 - T / 2, yBase + WALL_H / 2, cz - extS / 2, T, WALL_H, L + extS,
         concreteMat(L / 4, WALL_H / 4), true, def.floor);
-      wallBox(W / 2 + T / 2, yBase + WALL_H / 2, cz - extS / 2, T, WALL_H, L + extS,
-        concreteMat(L / 4, WALL_H / 4), true, def.floor);
       // 내측 흰 전시벽 (외벽 안쪽 면에서 2cm 띄움)
       const innerW1 = new THREE.Mesh(new THREE.PlaneGeometry(L, WALL_H), whiteWallMat);
       innerW1.position.set(-W / 2 + 0.02, yBase + WALL_H / 2, cz); innerW1.rotation.y = Math.PI / 2;
       scene.add(innerW1);
-      const innerW2 = new THREE.Mesh(new THREE.PlaneGeometry(L, WALL_H), whiteWallMat);
-      innerW2.position.set(W / 2 - 0.02, yBase + WALL_H / 2, cz); innerW2.rotation.y = -Math.PI / 2;
-      scene.add(innerW2);
+
+      const eastX = W / 2 + T / 2;
+      const innerEast = (segCz, segLen) => {
+        const p = new THREE.Mesh(new THREE.PlaneGeometry(segLen, WALL_H), whiteWallMat);
+        p.position.set(W / 2 - 0.02, yBase + WALL_H / 2, segCz); p.rotation.y = -Math.PI / 2;
+        scene.add(p);
+      };
+      if (def.day === 2) {
+        // Day 2 동쪽 벽의 계단 앞 빈 구간은 로비처럼 전면 유리창으로 열어
+        // 모래 언덕·수면·다이센 풍경이 들여다보이게 한다 (우에다 미술관 오마주).
+        const bayN = stairways[1].zBottom + 1.2;
+        const bayS = zFrom - 3.2;
+        const bayLen = bayS - bayN;
+        const bayCz = (bayN + bayS) / 2;
+        // 남북 솔리드 구간
+        const nLen = bayN - (zTo - extS);
+        wallBox(eastX, yBase + WALL_H / 2, (bayN + zTo - extS) / 2, T, WALL_H, nLen,
+          concreteMat(nLen / 4, WALL_H / 4), true, def.floor);
+        innerEast((bayN + zTo) / 2, bayN - zTo);
+        const sLen = zFrom - bayS;
+        wallBox(eastX, yBase + WALL_H / 2, (zFrom + bayS) / 2, T, WALL_H, sLen,
+          concreteMat(sLen / 4, WALL_H / 4), true, def.floor);
+        innerEast((zFrom + bayS) / 2, sLen);
+        // 창: 낮은 콘크리트 턱 + 유리 + 상부 인방
+        wallBox(eastX, yBase + 0.375, bayCz, T, 0.75, bayLen,
+          concreteMat(bayLen / 4, 0.6), false, def.floor);
+        wallBox(eastX, yBase + (3.4 + WALL_H) / 2, bayCz, T, WALL_H - 3.4, bayLen,
+          concreteMat(bayLen / 4, 1.2), false, def.floor);
+        addCollider(eastX, bayCz, T, bayLen, def.floor);
+        const bayGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.65, bayLen),
+          new THREE.MeshPhysicalMaterial({ color: 0xdfeef2, transparent: true, opacity: 0.14,
+            roughness: 0.05, metalness: 0, side: THREE.DoubleSide }));
+        bayGlass.position.set(eastX, yBase + 0.75 + 2.65 / 2, bayCz);
+        scene.add(bayGlass);
+        const posts = Math.max(2, Math.round(bayLen / 3.5));
+        for (let i = 0; i <= posts; i++) {
+          wallBox(eastX, yBase + WALL_H / 2, bayN + (bayLen / posts) * i, 0.12, WALL_H, 0.12,
+            darkMat, false, def.floor);
+        }
+        // 외부: 수면과 다이센 배경 (로비 앞 풍경의 연장)
+        const bayWater = new THREE.Mesh(new THREE.PlaneGeometry(26, bayLen + 10),
+          new THREE.MeshStandardMaterial({ color: 0xb9d3da, roughness: 0.04, metalness: 0.85, envMapIntensity: 1.3 }));
+        bayWater.rotation.x = -Math.PI / 2;
+        bayWater.position.set(W / 2 + 14, 0.06, bayCz);
+        scene.add(bayWater);
+      } else {
+        wallBox(eastX, yBase + WALL_H / 2, cz - extS / 2, T, WALL_H, L + extS,
+          concreteMat(L / 4, WALL_H / 4), true, def.floor);
+        innerEast(cz, L);
+      }
 
       // 벽-바닥 접합부: 걸레받이 + AO
       baseboard(-W / 2 + 0.03, cz, L, false, yBase);
@@ -1184,8 +1243,45 @@ if (IS_TOUCH) {
   renderer.domElement.addEventListener('touchcancel', endTouch, { passive: true });
 }
 
+/* ═══════════════════ 배경 음악 ═══════════════════ */
+// assets/bgm.mp3 가 있으면 입장 시 은은하게 루프 재생. 없으면 버튼도 나타나지 않는다.
+const BGM_VOLUME = 0.14;
+const bgmBtn = document.getElementById('bgmBtn');
+const bgm = new Audio('assets/bgm.mp3');
+bgm.loop = true; bgm.preload = 'auto'; bgm.volume = 0;
+let bgmAvailable = false, bgmOn = false, bgmTarget = 0;
+bgm.addEventListener('canplaythrough', () => {
+  bgmAvailable = true;
+  document.body.classList.add('has-bgm');
+  // 음원이 늦게 준비돼도 이미 입장해 있으면 바로 시작한다.
+  if (document.body.classList.contains('playing')) startBgm();
+}, { once: true });
+bgm.addEventListener('error', () => { bgmAvailable = false; });
+
+function startBgm() {
+  if (!bgmAvailable || bgmOn) return;
+  bgmOn = true; bgmTarget = BGM_VOLUME;
+  bgm.play().catch(() => { bgmOn = false; bgmTarget = 0; });
+  bgmBtn.setAttribute('aria-pressed', 'true');
+}
+function stopBgm() {
+  bgmOn = false; bgmTarget = 0;
+  bgmBtn.setAttribute('aria-pressed', 'false');
+}
+bgmBtn.addEventListener('click', () => (bgmOn ? stopBgm() : startBgm()));
+
+// 페이드 인·아웃과 뷰어 영상 감상 중 자동 덕킹(볼륨 낮춤)
+function updateBgm(dt) {
+  if (!bgmAvailable) return;
+  const ducked = viewerOpen && viewerBody.querySelector('video');
+  const target = bgmTarget * (ducked ? 0.2 : 1);
+  bgm.volume = Math.max(0, Math.min(1, bgm.volume + (target - bgm.volume) * Math.min(1, dt * 1.6)));
+  if (!bgmOn && bgm.volume < 0.004 && !bgm.paused) bgm.pause();
+}
+
 /* 입장 버튼 */
 enterBtn.addEventListener('click', () => {
+  startBgm(); // 사용자 제스처 시점이라 자동재생 정책에 걸리지 않는다.
   document.body.classList.add('playing');
   startEl.classList.add('hidden');
   startEl.setAttribute('aria-hidden', 'true');
@@ -1600,6 +1696,7 @@ function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePlayer(dt);
   updateRooms(performance.now());
+  updateBgm(dt);
   renderer.render(scene, camera);
 }
 

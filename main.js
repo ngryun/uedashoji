@@ -547,7 +547,8 @@ function buildStaircase(stair) {
     { text: stair.label || 'STAIRS · 2F', size: 0.14, weight: 600, spacing: 0.035, color: '#f1efe9' },
     { text: 'DAY 3 · DAY 4', size: 0.08, color: '#c8c4bb' },
   ], 1.5, 0.7, { bg: '#2b2d30' });
-  stairSign.position.set(stair.xMax + 0.75, 1.45, stair.zBottom + 0.04);
+  const signX = stair.signSide === 'left' ? stair.xMin - 0.75 : stair.xMax + 0.75;
+  stairSign.position.set(signX, 1.45, stair.zBottom + 0.04);
   scene.add(stairSign);
 }
 
@@ -585,10 +586,12 @@ function buildMuseum(manifest) {
   // Day 2 순환 동선의 끝(남쪽 입구 부근)에서 2층 Day 3 북쪽 랜딩으로 연결한다.
   stairways.length = 1;
   stairways.push({
-    xMin: 1.45, xMax: 4.15,
+    // 중앙 관람 통로를 비우고 동쪽 벽 쪽에 계단 전용 영역을 둔다.
+    xMin: 3.0, xMax: 5.45,
     zBottom: dayDefs[1].zFrom - 1.0,
     zTop: dayDefs[1].zFrom - 8.0,
     label: 'NEXT · DAY 3',
+    signSide: 'left',
   });
 
   /* ── 층별 바닥과 2층 슬래브 ── */
@@ -787,9 +790,10 @@ function buildMuseum(manifest) {
         bShadow.renderOrder = 2; scene.add(bShadow);
         addCollider(0, cz, 0.55, 2.6, def.floor);
       }
-      // 동쪽 벽: 북→남
+      // 동쪽 벽: 북→남. Day 2 남쪽 끝은 계단 전용 영역으로 비워 둔다.
+      const eastSouthPad = def.day === 2 ? 11.2 : pad;
       lineList.push({
-        len: L - pad * 2,
+        len: L - pad - eastSouthPad,
         slot: (t) => ({ x: W / 2 - 0.03, y: yBase + 1.6, z: zTo + pad + t, rotY: -Math.PI / 2 })
       });
 
@@ -1409,8 +1413,9 @@ async function init() {
     const manifest = await res.json();
     buildMuseum(manifest);
     build2DGallery(manifest);
-    // 시각 검수용: ?preview=video에서 첫 영상 정면으로 시작한다.
-    if (new URLSearchParams(location.search).get('preview') === 'video') {
+    // 시각 검수용: ?preview=video 또는 ?preview=day2-stair로 시작 위치를 바꾼다.
+    const preview = new URLSearchParams(location.search).get('preview');
+    if (preview === 'video') {
       const previewArt = artworks.find(art => art.isVideo);
       if (previewArt) {
         const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(previewArt.group.quaternion);
@@ -1419,6 +1424,14 @@ async function init() {
         spawnPoint.y = EYE + player.floor * FLOOR_HEIGHT;
         player.yaw = Math.atan2(normal.x, normal.z);
         updateFloorNav(player.floor);
+      }
+    } else if (preview === 'day2-stair') {
+      const stair = stairways[1];
+      if (stair) {
+        player.floor = 0;
+        spawnPoint.set((stair.xMin + stair.xMax) / 2, EYE, stair.zBottom + 0.45);
+        player.yaw = 0;
+        updateFloorNav(0);
       }
     }
     player.pos.copy(spawnPoint);

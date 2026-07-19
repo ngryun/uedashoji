@@ -20,6 +20,8 @@ const T = 0.4;                // 벽 두께
 const HALL_W = 12;            // 전시실 폭
 const DOOR_W = 4, DOOR_H = 3.2;
 const SPACING = 1.7;          // 작품 간격 (m)
+// 벽면에서 작품 하나가 차지하는 폭(간격 포함). 영상은 투사 화면이 넓다.
+const widthNeedOf = (it) => it.type === 'video' ? (it.w >= it.h ? 3.6 : 2.0) : SPACING;
 const MAX_TEX = IS_TOUCH ? 512 : 768;   // GPU 텍스처 최대 크기
 const NEAR_VIDEO = 9;         // 비디오 자동재생 거리
 const VIDEO_KEEP_DISTANCE = 13;
@@ -277,16 +279,54 @@ const frameGeo = new THREE.BoxGeometry(1, 1, 1);
 const frameMat = new THREE.MeshStandardMaterial({ color: 0x17171a, roughness: 0.35, metalness: 0.2, envMapIntensity: 0.9 });
 const shadowGeo = new THREE.PlaneGeometry(1, 1);
 const artworkPlaneGeo = new THREE.PlaneGeometry(1, 1);
+// 스크린 둘레의 사각 빛 번짐 — 프로젝터 빛이 벽면에 번진 느낌 (타원 글로우는 조명 얼룩처럼 보였음)
+const projSpillTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  // 캔버스 밖에 사각형을 그리고 그림자만 남겨 부드러운 사각 글로우를 얻는다.
+  g.shadowColor = 'rgba(255,250,238,0.9)';
+  g.shadowBlur = 42;
+  g.shadowOffsetX = 512;
+  g.fillStyle = '#fff';
+  g.fillRect(46 - 512, 46, 164, 164);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  return t;
+})();
 const projectionGlowMat = new THREE.MeshBasicMaterial({
-  map: glowTex, transparent: true, opacity: 0.72, depthWrite: false,
+  map: projSpillTex, transparent: true, opacity: 0.55, depthWrite: false,
   toneMapped: false, blending: THREE.AdditiveBlending,
 });
+const beamMat = new THREE.MeshBasicMaterial({
+  color: 0xfff6e2, transparent: true, opacity: 0.03, depthWrite: false,
+  side: THREE.DoubleSide, toneMapped: false, blending: THREE.AdditiveBlending,
+});
+const VIDEO_RAISE = 0.55;     // 영상은 사진 걸이선보다 높은 벽면에 투사
+const PROJECTOR_DIST = 3.1;   // 벽면-프로젝터 거리
+const PROJECTOR_Y = 2.2;      // 스크린 중심 기준 프로젝터 로컬 높이
+
+// 프로젝터 렌즈에서 스크린 네 모서리로 퍼지는 광선 볼륨
+function updateBeamGeometry(art) {
+  const hw = art.pw / 2 + 0.12, hh = art.ph / 2 + 0.12;
+  const a = [0, PROJECTOR_Y - 0.02, PROJECTOR_DIST - 0.22];
+  const corners = [[-hw, -hh, 0.02], [hw, -hh, 0.02], [hw, hh, 0.02], [-hw, hh, 0.02]];
+  const tris = [];
+  // 아래 면은 빼서 밑에서 올려다볼 때 면들이 겹쳐 보이는 난반사를 줄인다.
+  for (let i = 1; i < 4; i++) tris.push(a, corners[i], corners[(i + 1) % 4]);
+  art.beamGeo.setAttribute('position', new THREE.Float32BufferAttribute(tris.flat(), 3));
+  art.beamGeo.computeBoundingSphere();
+}
 
 function fitArtworkToAspect(art, aspect) {
   if (!Number.isFinite(aspect) || aspect <= 0) return;
   let pw, ph;
   if (aspect >= 1) { pw = art.maxDim; ph = art.maxDim / aspect; }
   else { ph = art.maxDim; pw = art.maxDim * aspect; }
+  // 영상: 실제 화면비가 슬롯보다 넓으면 옆 작품과 겹치지 않게 축소한다.
+  if (art.isVideo && art.slotW) {
+    const limit = Math.max(1.1, art.slotW - 0.35);
+    if (pw > limit) { ph *= limit / pw; pw = limit; }
+  }
 
   const w = pw + art.matPad * 2;
   const h = ph + art.matPad * 2;
@@ -296,6 +336,7 @@ function fitArtworkToAspect(art, aspect) {
   if (art.frame) art.frame.scale.set(w + art.border * 2, h + art.border * 2, 0.055);
   if (art.shadow) art.shadow.scale.set((w + art.border * 2) * 1.45, (h + art.border * 2) * 1.45, 1);
   if (art.projectionGlow) art.projectionGlow.scale.set(pw + 0.7, ph + 0.7, 1);
+  if (art.beamGeo) updateBeamGeometry(art);
   if (art.caption) art.caption.position.y = -ph / 2 - 0.2;
 
   // 사진 텍스처에는 매트가 합성되어 있고, 영상은 원본 화면 비율만 사용한다.
@@ -306,7 +347,7 @@ function createArtwork(item, roomIdx, idxInDay, dayLabel) {
   const isVideo = item.type === 'video';
   const aspect = item.w / item.h;
   // 사진 영역 크기 (최대변 기준)
-  const maxDim = isVideo ? 2.15 : 1.05;
+  const maxDim = isVideo ? 2.0 : 1.05;
   const mat = isVideo ? 0 : 0.16;           // 사진만 매트(여백) 사용
   const border = isVideo ? 0 : 0.045;       // 영상은 벽면 직접 투사
 
@@ -314,6 +355,8 @@ function createArtwork(item, roomIdx, idxInDay, dayLabel) {
   let shadow = null;
   let frame = null;
   let projectionGlow = null;
+  let beam = null;
+  let beamGeo = null;
   let caption = null;
   if (isVideo) {
     // 프로젝터가 벽에 직접 투사한 듯 화면 둘레에 부드러운 광량만 남긴다.
@@ -321,6 +364,24 @@ function createArtwork(item, roomIdx, idxInDay, dayLabel) {
     projectionGlow.position.z = 0.006;
     projectionGlow.renderOrder = 1;
     group.add(projectionGlow);
+    // 천장 프로젝터 리그(봉+본체+렌즈): 영상이 꺼져 있어도 투사 지점임을 보여 준다.
+    const ceilLocal = WALL_H - 1.6 - VIDEO_RAISE; // group은 yBase+1.6+VIDEO_RAISE 높이에 놓인다
+    const rodH = ceilLocal - PROJECTOR_Y - 0.075;
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, rodH, 8), frameMat);
+    rod.position.set(0, PROJECTOR_Y + 0.075 + rodH / 2, PROJECTOR_DIST);
+    group.add(rod);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.15, 0.36), frameMat);
+    body.position.set(0, PROJECTOR_Y, PROJECTOR_DIST);
+    group.add(body);
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.06, 12), darkMat);
+    lens.rotation.x = Math.PI / 2;
+    lens.position.set(0, PROJECTOR_Y - 0.02, PROJECTOR_DIST - 0.2);
+    group.add(lens);
+    beamGeo = new THREE.BufferGeometry();
+    beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.renderOrder = 3;
+    beam.visible = false;
+    group.add(beam);
     caption = textPlane([
       { text: 'PROJECTED FILM', size: 0.065, weight: 600, spacing: 0.025, color: '#6e6b65' },
       { text: `DAY ${item.day} · No.${String(idxInDay).padStart(3, '0')}`, size: 0.065, color: '#918e87' },
@@ -350,7 +411,7 @@ function createArtwork(item, roomIdx, idxInDay, dayLabel) {
   }
   group.add(plane);
 
-  const art = { item, group, plane, frame, shadow, projectionGlow, caption,
+  const art = { item, group, plane, frame, shadow, projectionGlow, beam, beamGeo, caption,
                 border, maxDim, matPad: mat, isVideo, roomIdx, idxInDay, dayLabel,
                 loaded: false, loading: false, tex: null, video: null, vtex: null, pos: new THREE.Vector3() };
   fitArtworkToAspect(art, aspect);
@@ -360,11 +421,12 @@ function createArtwork(item, roomIdx, idxInDay, dayLabel) {
   return art;
 }
 
-// 슬롯에 작품 배치: slot = {x, y, z, rotY}
+// 슬롯에 작품 배치: slot = {x, y, z, rotY} — 영상은 사진 걸이선보다 높이 투사한다.
 function placeArtwork(art, slot) {
-  art.group.position.set(slot.x, slot.y, slot.z);
+  const y = slot.y + (art.isVideo ? VIDEO_RAISE : 0);
+  art.group.position.set(slot.x, y, slot.z);
   art.group.rotation.y = slot.rotY;
-  art.pos.set(slot.x, slot.y, slot.z);
+  art.pos.set(slot.x, y, slot.z);
   scene.add(art.group);
 }
 
@@ -411,8 +473,10 @@ function pumpLoads() {
       const g = c.getContext('2d');
       g.fillStyle = '#f6f4f0'; g.fillRect(0, 0, c.width, c.height);
       g.drawImage(img, padX, padY, iw, ih);
-      g.strokeStyle = 'rgba(0,0,0,.18)'; g.lineWidth = 1;
-      g.strokeRect(padX - .5, padY - .5, iw + 1, ih + 1);
+      if (!art.isVideo) {
+        g.strokeStyle = 'rgba(0,0,0,.18)'; g.lineWidth = 1;
+        g.strokeRect(padX - .5, padY - .5, iw + 1, ih + 1);
+      }
       if (!art.isVideo && padY > 14) {
         g.fillStyle = '#8d8a84';
         g.font = `${Math.max(10, padY * 0.3)}px "Helvetica Neue",sans-serif`;
@@ -423,7 +487,15 @@ function pumpLoads() {
       const tex = new THREE.CanvasTexture(c);
       tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
       art.tex = tex; art.loaded = true; art.lastUsed = performance.now();
-      art.plane.material.map = tex;
+      if (!art.isVideo) {
+        art.plane.material.map = tex;
+      } else if (!art.video) {
+        // 대기 중 프로젝션: 첫 프레임 포스터를 살짝 어둡게 투사해 둔다.
+        art.plane.material.map = tex;
+        art.plane.material.color.setHex(0xb4b2ae);
+        art.plane.visible = true;
+        art.projectionGlow.visible = true;
+      }
       art.plane.material.needsUpdate = true;
       pumpLoads();
     };
@@ -433,18 +505,35 @@ function pumpLoads() {
       art.retryAt = performance.now() + 10000;
       pumpLoads();
     };
-    img.src = art.item.thumb || art.item.file;
+    // 영상은 mp4를 <img>로 읽을 수 없으므로 반드시 썸네일만 사용한다.
+    img.src = art.isVideo ? art.item.thumb : (art.item.thumb || art.item.file);
   }
 }
-function unloadArt(art) {
-  art.plane.material.map = placeholderTex;
-  art.plane.material.needsUpdate = true;
-  if (art.tex) { art.tex.dispose(); art.tex = null; }
+// 영상 재생 리소스만 해제 — 포스터가 있으면 대기 화면으로 되돌린다.
+function releaseVideoPlayback(art) {
   if (art.video) {
     art.video.pause(); art.video.removeAttribute('src'); art.video.load();
     if (art.vtex) art.vtex.dispose();
     art.video = null; art.vtex = null;
   }
+  art.beam.visible = false;
+  if (art.tex) {
+    art.plane.material.map = art.tex;
+    art.plane.material.color.setHex(0xb4b2ae);
+    art.plane.material.needsUpdate = true;
+  } else {
+    art.plane.visible = false;
+    art.projectionGlow.visible = false;
+    art.loaded = false; // 포스터가 없으면 다음 갱신 때 썸네일을 로드한다.
+  }
+}
+
+function unloadArt(art) {
+  if (art.isVideo) releaseVideoPlayback(art);
+  art.plane.material.map = placeholderTex;
+  art.plane.material.color.setHex(0xffffff);
+  art.plane.material.needsUpdate = true;
+  if (art.tex) { art.tex.dispose(); art.tex = null; }
   if (art.isVideo) {
     art.plane.visible = false;
     art.projectionGlow.visible = false;
@@ -542,6 +631,8 @@ function buildStaircase(stair) {
     addCollider(stair.xMin - 0.08, railZ, 0.16, run, floor);
     addCollider(stair.xMax + 0.08, railZ, 0.16, run, floor);
   }
+  // 계단 뒤(높은 쪽)로 1층에서 파고들어 순간이동하지 못하게 막는다.
+  addCollider(centerX, stair.zTop - 0.28, width + 0.2, 0.2, 0);
 
   const stairSign = textPlane([
     { text: stair.label || 'STAIRS · 2F', size: 0.14, weight: 600, spacing: 0.035, color: '#f1efe9' },
@@ -557,22 +648,37 @@ function buildMuseum(manifest) {
   for (const it of manifest.items) byDay[it.day - 1].push(it);
   const dayShort = ['7/12', '7/13', '7/14', '7/15'];
 
+  // 방 길이: 작품별 필요 폭의 합이 벽면에 여유(6%) 있게 들어가도록 역산한다.
+  // 벽면 길이(pad 2.4, pPad 3.4 기준): 서쪽 L-4.8, 가벽 양면 각 L-7.6, 동쪽 L-4.8.
+  const SLACK = 1.06;
   const dayDefs = byDay.map((items, i) => {
     const count = items.length;
     const usePartition = count > 34;
-    const lines = usePartition ? 4 : 2;
-    const L = Math.max(12, Math.ceil((count / lines) * SPACING + 6));
+    const need = items.reduce((s, it) => s + widthNeedOf(it), 0) * SLACK;
+    const L = Math.max(12, Math.ceil(usePartition ? (need + 24.8) / 4 : (need + 9.6) / 2));
     const floor = i < 2 ? 0 : 1;
     return { type: 'hall', day: i + 1, floor, elevation: floor * FLOOR_HEIGHT,
-      W: HALL_W, L, usePartition, label: `${floor + 1}F · ${manifest.days[i]}`, items };
+      W: HALL_W, L, need, usePartition, label: `${floor + 1}F · ${manifest.days[i]}`, items };
   });
+  // Day 3은 동쪽 벽 일부가 계단 개구부에 잘리므로(동쪽 벽 L-12.6) 그만큼 방을 늘린다.
+  if (dayDefs[2].usePartition) {
+    dayDefs[2].L = Math.max(dayDefs[2].L, Math.ceil((dayDefs[2].need + 32.6) / 4));
+  }
+  // Day 2의 동쪽 벽은 계단 위쪽 끝(2층 평면 기준)까지만 사용 가능:
+  // eastLen = L1 + L2 − (L3 + L4) − 0.6 이므로 필요 길이를 만족하는 L2를 역산.
+  if (dayDefs[1].usePartition) {
+    dayDefs[1].L = Math.max(dayDefs[1].L, Math.ceil(
+      (dayDefs[1].need + 20.6 + dayDefs[2].L + dayDefs[3].L - dayDefs[0].L) / 4));
+  }
 
   /* ── 1층과 2층을 같은 평면 위에 쌓아 배치 ── */
+  // 2층은 Day 2 끝 계단으로 올라온 관람객이 북쪽에서 진입하므로 Day 3을 북쪽, Day 4를 남쪽에 둔다.
+  // 전체 동선: 로비 → Day 1 → Day 2 → 계단 → Day 3 → Day 4 → 2층 로비 → 중앙 계단으로 하강.
   const floorDefs = [
     [{ type: 'lobby', floor: 0, elevation: 0, W: 16, L: 14, label: '1F · ENTRANCE HALL' },
       dayDefs[0], dayDefs[1]],
     [{ type: 'lobby', floor: 1, elevation: FLOOR_HEIGHT, upper: true,
-       W: 16, L: 14, label: '2F · UPPER HALL' }, dayDefs[2], dayDefs[3]],
+       W: 16, L: 14, label: '2F · UPPER HALL' }, dayDefs[3], dayDefs[2]],
   ];
   for (const defs of floorDefs) {
     let floorZ = 14;
@@ -583,13 +689,14 @@ function buildMuseum(manifest) {
     }
   }
   const roomDefs = floorDefs.flat();
-  // Day 2 순환 동선의 끝(남쪽 입구 부근)에서 2층 Day 3 북쪽 랜딩으로 연결한다.
+  // Day 2 관람 동선의 끝(북쪽)에 계단을 두어 사진을 다 본 뒤 2층으로 오르게 한다.
+  // 2층 평면은 1층보다 짧으므로, 랜딩이 2층(Day 3 북쪽 끝) 안에 놓이도록 z를 2층 기준으로 잡는다.
   stairways.length = 1;
   stairways.push({
     // 중앙 관람 통로를 비우고 동쪽 벽 쪽에 계단 전용 영역을 둔다.
     xMin: 3.0, xMax: 5.45,
-    zBottom: dayDefs[1].zFrom - 1.0,
-    zTop: dayDefs[1].zFrom - 8.0,
+    zBottom: dayDefs[2].zTo + 9.0,
+    zTop: dayDefs[2].zTo + 2.0,
     label: 'NEXT · DAY 3',
     signSide: 'left',
   });
@@ -790,31 +897,60 @@ function buildMuseum(manifest) {
         bShadow.renderOrder = 2; scene.add(bShadow);
         addCollider(0, cz, 0.55, 2.6, def.floor);
       }
-      // 동쪽 벽: 북→남. Day 2 남쪽 끝은 계단 전용 영역으로 비워 둔다.
-      const eastSouthPad = def.day === 2 ? 11.2 : pad;
+      // 동쪽 벽: 계단실과 겹치는 구간은 비워 둔다.
+      // Day 2는 북쪽 끝이 영상 투사 벽이 되므로 계단 바로 앞까지 최대한 길게 쓴다.
+      // Day 3(2층)은 계단 개구부 남쪽까지만 사진을 건다.
+      const stair2 = stairways[1];
+      let eastStart = zTo + pad;
+      let eastLen = L - pad * 2;
+      if (def.day === 2) {
+        eastStart = zTo + 1.6;
+        eastLen = (stair2.zTop - 1.0) - eastStart;
+      }
+      if (def.day === 3) eastLen = (zFrom - pad) - (stair2.zBottom + 1.2);
       lineList.push({
-        len: L - pad - eastSouthPad,
-        slot: (t) => ({ x: W / 2 - 0.03, y: yBase + 1.6, z: zTo + pad + t, rotY: -Math.PI / 2 })
+        len: eastLen,
+        slot: (t) => ({ x: W / 2 - 0.03, y: yBase + 1.6, z: eastStart + t, rotY: -Math.PI / 2 })
       });
 
-      /* 작품 분배 */
+      // 2층 전시실은 계단 랜딩(북쪽)에서 진입하므로 관람 동선을 남북 반전한다.
+      if (def.floor === 1) {
+        for (const line of lineList) {
+          const baseSlot = line.slot;
+          line.slot = (t) => { const s = baseSlot(t); s.z = zFrom + zTo - s.z; return s; };
+        }
+      }
+
+      /* 작품 분배 — 영상은 투사 폭이 넓어 사진보다 넓은 간격이 필요하다 */
       const items = def.items;
       const totalLen = lineList.reduce((s, l) => s + l.len, 0);
+      const totalNeed = items.reduce((s, it) => s + widthNeedOf(it), 0);
+      const scale = totalLen / totalNeed;
       let assigned = 0;
       lineList.forEach((line, li) => {
-        let n = (li === lineList.length - 1)
-          ? items.length - assigned
-          : Math.round(items.length * line.len / totalLen);
-        n = Math.min(n, items.length - assigned);
-        const step = line.len / Math.max(n, 1);
-        for (let k = 0; k < n; k++) {
-          const item = items[assigned + k];
+        const isLast = li === lineList.length - 1;
+        const placed = [];
+        let cum = 0;
+        while (assigned + placed.length < items.length) {
+          const item = items[assigned + placed.length];
+          const w = widthNeedOf(item) * scale;
+          if (!isLast && cum + w > line.len + 0.01) break;
+          placed.push({ item, center: cum + w / 2 });
+          cum += w;
+        }
+        // 마지막 라인이 넘치면 압축하고, 남으면 가운데 정렬한다.
+        const squeeze = cum > line.len ? line.len / cum : 1;
+        const offset = Math.max(0, (line.len - cum) / 2);
+        placed.forEach(({ item, center }, k) => {
           const art = createArtwork(item, rooms.length, assigned + k + 1, dayShort[def.day - 1]);
           art.floor = def.floor;
-          placeArtwork(art, line.slot(step * (k + 0.5)));
+          // 실제 영상 화면비가 manifest와 달라도 옆 작품을 침범하지 않도록 슬롯 폭을 기억한다.
+          art.slotW = widthNeedOf(item) * scale * squeeze;
+          fitArtworkToAspect(art, art.aspect);
+          placeArtwork(art, line.slot(squeeze < 1 ? center * squeeze : offset + center));
           roomGroup.add(art.group);
-        }
-        assigned += n;
+        });
+        assigned += placed.length;
       });
 
       // 입구 위 방 이름
@@ -1259,7 +1395,7 @@ function updateRooms(now) {
 
   for (const art of artworks) art.distanceFromPlayer = art.pos.distanceTo(player.pos);
   const loadTargets = new Set(artworks
-    .filter(art => !art.isVideo
+    .filter(art => (!art.isVideo || art.item.thumb)
       && art.floor === player.floor
       && Math.abs(art.roomIdx - currentRoomIdx) <= 1
       && art.distanceFromPlayer <= ART_LOAD_DISTANCE)
@@ -1274,8 +1410,8 @@ function updateRooms(now) {
     art.loadTarget = shouldLoad;
     art.wanted = art.isVideo ? shouldKeep : (shouldLoad || (art.loaded && shouldKeep));
     if (art.loaded && shouldKeep) art.lastUsed = now;
-    if (shouldLoad && !art.loaded && !art.loading && !art.isVideo && !art.queued
-        && (!art.retryAt || now >= art.retryAt)) {
+    if (shouldLoad && !art.loaded && !art.loading && (!art.isVideo || art.item.thumb)
+        && !art.queued && (!art.retryAt || now >= art.retryAt)) {
       art.queued = true;
       loadQueue.push(art);
     }
@@ -1310,16 +1446,26 @@ function updateRooms(now) {
         const vt = new THREE.VideoTexture(v);
         vt.colorSpace = THREE.SRGBColorSpace;
         a.vtex = vt;
-        a.plane.material.map = vt;
-        a.plane.material.needsUpdate = true;
+        // 첫 프레임이 준비되면 포스터에서 실시간 화면으로 교체한다 (검은 화면 노출 방지).
+        const swapToLive = () => {
+          if (a.video !== v) return;
+          a.plane.material.map = vt;
+          a.plane.material.color.setHex(0xffffff);
+          a.plane.material.needsUpdate = true;
+        };
+        if (a.tex) v.addEventListener('loadeddata', swapToLive, { once: true });
+        else swapToLive();
         a.plane.visible = true;
         a.projectionGlow.visible = true;
         a.loaded = true;
       }
       a.video.play().catch(() => {});
+      a.beam.visible = true;
     } else if (a.video) {
-      if (d > VIDEO_KEEP_DISTANCE) unloadArt(a);
-      else a.video.pause();
+      // 멀어지면 재생 리소스를 놓고 포스터(대기 화면)로 되돌린다.
+      if (d > VIDEO_KEEP_DISTANCE) releaseVideoPlayback(a);
+      // 일시정지된 프로젝션은 화면만 남기고 광선은 꺼서 겹치는 빔 난반사를 줄인다.
+      else { a.video.pause(); a.beam.visible = false; }
     }
   }
 }

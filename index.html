@@ -71,6 +71,14 @@
     border-radius: 999px; background: rgba(20,22,26,.5); backdrop-filter: blur(8px);
   }
   body.playing #floorNav { display: flex; }
+  #bgmBtn {
+    position: fixed; top: calc(14px + env(safe-area-inset-top)); left: 16px; z-index: 12;
+    display: none; padding: 8px 15px; border: 1px solid rgba(255,255,255,.2);
+    border-radius: 999px; background: rgba(20,22,26,.5); backdrop-filter: blur(8px);
+    color: rgba(255,255,255,.7); font-size: 11.5px; letter-spacing: .08em; cursor: pointer;
+  }
+  body.playing.has-bgm #bgmBtn { display: block; }
+  #bgmBtn[aria-pressed="true"] { color: #17191d; background: #f0eee9; }
   #floorNav button {
     min-width: 58px; padding: 7px 10px; border: 0; border-radius: 999px; cursor: pointer;
     color: rgba(255,255,255,.7); background: transparent; font-size: 11px; letter-spacing: .08em;
@@ -188,6 +196,7 @@
   <button type="button" data-floor="0" aria-pressed="true">1F · 1–2일</button>
   <button type="button" data-floor="1" aria-pressed="false">2F · 3–4일</button>
 </nav>
+<button id="bgmBtn" type="button" aria-pressed="false" aria-label="배경 음악 켜기·끄기">♪ BGM</button>
 
 <div id="viewer" role="dialog" aria-modal="true" aria-labelledby="viewerCap" aria-hidden="true" tabindex="-1">
   <button id="viewerClose" type="button" aria-label="확대 보기 닫기">✕</button>

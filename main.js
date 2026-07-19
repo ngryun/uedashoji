@@ -1243,8 +1243,45 @@ if (IS_TOUCH) {
   renderer.domElement.addEventListener('touchcancel', endTouch, { passive: true });
 }
 
+/* ═══════════════════ 배경 음악 ═══════════════════ */
+// assets/bgm.mp3 가 있으면 입장 시 은은하게 루프 재생. 없으면 버튼도 나타나지 않는다.
+const BGM_VOLUME = 0.14;
+const bgmBtn = document.getElementById('bgmBtn');
+const bgm = new Audio('assets/bgm.mp3');
+bgm.loop = true; bgm.preload = 'auto'; bgm.volume = 0;
+let bgmAvailable = false, bgmOn = false, bgmTarget = 0;
+bgm.addEventListener('canplaythrough', () => {
+  bgmAvailable = true;
+  document.body.classList.add('has-bgm');
+  // 음원이 늦게 준비돼도 이미 입장해 있으면 바로 시작한다.
+  if (document.body.classList.contains('playing')) startBgm();
+}, { once: true });
+bgm.addEventListener('error', () => { bgmAvailable = false; });
+
+function startBgm() {
+  if (!bgmAvailable || bgmOn) return;
+  bgmOn = true; bgmTarget = BGM_VOLUME;
+  bgm.play().catch(() => { bgmOn = false; bgmTarget = 0; });
+  bgmBtn.setAttribute('aria-pressed', 'true');
+}
+function stopBgm() {
+  bgmOn = false; bgmTarget = 0;
+  bgmBtn.setAttribute('aria-pressed', 'false');
+}
+bgmBtn.addEventListener('click', () => (bgmOn ? stopBgm() : startBgm()));
+
+// 페이드 인·아웃과 뷰어 영상 감상 중 자동 덕킹(볼륨 낮춤)
+function updateBgm(dt) {
+  if (!bgmAvailable) return;
+  const ducked = viewerOpen && viewerBody.querySelector('video');
+  const target = bgmTarget * (ducked ? 0.2 : 1);
+  bgm.volume = Math.max(0, Math.min(1, bgm.volume + (target - bgm.volume) * Math.min(1, dt * 1.6)));
+  if (!bgmOn && bgm.volume < 0.004 && !bgm.paused) bgm.pause();
+}
+
 /* 입장 버튼 */
 enterBtn.addEventListener('click', () => {
+  startBgm(); // 사용자 제스처 시점이라 자동재생 정책에 걸리지 않는다.
   document.body.classList.add('playing');
   startEl.classList.add('hidden');
   startEl.setAttribute('aria-hidden', 'true');
@@ -1659,6 +1696,7 @@ function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePlayer(dt);
   updateRooms(performance.now());
+  updateBgm(dt);
   renderer.render(scene, camera);
 }
 

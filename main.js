@@ -29,6 +29,13 @@ const ART_LOAD_DISTANCE = IS_TOUCH ? 16 : 22;
 const ART_KEEP_DISTANCE = IS_TOUCH ? 22 : 30;
 const ART_VISIBLE_DISTANCE = IS_TOUCH ? 30 : 42;
 const MAX_LOADED_PHOTOS = IS_TOUCH ? 36 : 56;
+const AUTO_SPEED = 1.1;       // 자동 관람 이동 속도 (m/s) — 아주 천천히
+const AUTO_DWELL_PHOTO = 4;   // 사진 앞 감상 시간 (s)
+const AUTO_DWELL_VIDEO = 9;   // 영상 앞 감상 시간 (s)
+
+// 한국어 요일 → 일본어 병기 ("(일)" → "(일·日)")
+const WEEKDAY_JA = { '일': '日', '월': '月', '화': '火', '수': '水', '목': '木', '금': '金', '토': '土' };
+const biDay = (label) => label.replace(/\(([일월화수목금토])\)/, (_, d) => `(${d}·${WEEKDAY_JA[d]})`);
 
 /* ═══════════════════ 기본 셋업 ═══════════════════ */
 const app = document.getElementById('app');
@@ -211,7 +218,7 @@ function textPlane(lines, w, h, opt = {}) {
   g.textAlign = 'center'; g.textBaseline = 'middle';
   const n = lines.length;
   lines.forEach((ln, i) => {
-    g.font = `${ln.weight || 300} ${(ln.size || 0.1) * scale}px "Helvetica Neue","Apple SD Gothic Neo",sans-serif`;
+    g.font = `${ln.weight || 300} ${(ln.size || 0.1) * scale}px "Helvetica Neue","Apple SD Gothic Neo","Hiragino Kaku Gothic ProN","Noto Sans KR","Noto Sans JP",sans-serif`;
     if (ln.spacing) { try { g.letterSpacing = `${ln.spacing * scale}px`; } catch (e) {} }
     g.fillStyle = ln.color || opt.color || '#3a3a38';
     g.fillText(ln.text, c.width / 2, c.height * (i + 0.5) / n);
@@ -557,6 +564,8 @@ function enforcePhotoBudget() {
 const rooms = []; // {floor, elevation, label, zFrom(남,큰z), zTo(북,작은z), W, group}
 let spawnPoint = new THREE.Vector3(0, EYE, 10);
 const floorSpawnPoints = [];
+// 자동 관람 경로: {x, z, floor, art?} — art가 있으면 그 앞에 멈춰 감상한다.
+const tourStops = [];
 
 function cylinderBetween(a, b, radius, material) {
   const direction = new THREE.Vector3().subVectors(b, a);
@@ -653,10 +662,266 @@ function buildStaircase(stair) {
   scene.add(stairSign);
 }
 
+/* ═══════════════════ 2층 영상 상영실(시어터) ═══════════════════ */
+// 우에다 쇼지 미술관의 영상실 오마주. 전체 사진·영상을 잔잔하게 순환 상영한다.
+// 사진은 느린 줌(켄 번스)과 페이드, 영상은 중간 10초만 재생한다.
+let cinemaCtl = null;   // 슬라이드쇼 컨트롤러
+let cinemaInfo = null;  // {cz, screenX, screenY, viewX, roomIdx} — 자동 관람 경로용
+const CINEMA_MIRROR = true;   // 서쪽 벽 스크린은 좌우 반전되어 보이므로 되돌린다
+const CINEMA_MAX_TEX = IS_TOUCH ? 640 : 1024;
+
+function buildCinema(def, roomGroup) {
+  const { W, L, zFrom, zTo } = def;
+  const yBase = def.elevation;
+  const cz = (zFrom + zTo) / 2;
+
+  const wallMat = new THREE.MeshStandardMaterial({
+    color: 0x191a1e, roughness: 0.92, metalness: 0.0, envMapIntensity: 0.25 });
+  // 좌우 외벽 (어두움) — 스크린은 서쪽 벽
+  wallBox(-W / 2 - T / 2, yBase + WALL_H / 2, cz, T, WALL_H, L + 0.2, wallMat, true, def.floor);
+  wallBox(W / 2 + T / 2, yBase + WALL_H / 2, cz, T, WALL_H, L + 0.2, wallMat, true, def.floor);
+  const innerMat = new THREE.MeshStandardMaterial({ color: 0x0e0f12, roughness: 0.95 });
+  const westInner = new THREE.Mesh(new THREE.PlaneGeometry(L, WALL_H), innerMat);
+  westInner.position.set(-W / 2 + 0.02, yBase + WALL_H / 2, cz); westInner.rotation.y = Math.PI / 2;
+  scene.add(westInner);
+  const eastInner = new THREE.Mesh(new THREE.PlaneGeometry(L, WALL_H), innerMat);
+  eastInner.position.set(W / 2 - 0.02, yBase + WALL_H / 2, cz); eastInner.rotation.y = -Math.PI / 2;
+  scene.add(eastInner);
+  baseboard(-W / 2 + 0.03, cz, L, false, yBase);
+  baseboard(W / 2 - 0.03, cz, L, false, yBase);
+
+  // ── 스크린 (서쪽 벽, 방을 향해 +x) ──
+  const screenW = 6.8, screenH = screenW * 9 / 16;   // 16:9, ≈3.83
+  const screenY = yBase + 0.95 + screenH / 2;
+  const screenX = -W / 2 + 0.2;   // 스크린 면 (방을 향해 +x). 베젤은 이보다 뒤에 둔다.
+  // 검은 베젤 프레임 — 스크린 뒤(서쪽)에 놓아 테두리만 보이게 한다
+  const bezel = new THREE.Mesh(
+    new THREE.BoxGeometry(0.12, screenH + 0.34, screenW + 0.34),
+    new THREE.MeshStandardMaterial({ color: 0x050506, roughness: 0.5, metalness: 0.25 }));
+  bezel.position.set(-W / 2 + 0.06, screenY, cz);
+  scene.add(bezel);
+  const screenBase = new THREE.Mesh(new THREE.PlaneGeometry(screenW, screenH),
+    new THREE.MeshBasicMaterial({ color: 0x050608, toneMapped: false }));
+  screenBase.position.set(screenX, screenY, cz); screenBase.rotation.y = Math.PI / 2;
+  scene.add(screenBase);
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(screenW, screenH),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, toneMapped: false }));
+  screen.position.set(screenX + 0.02, screenY, cz); screen.rotation.y = Math.PI / 2;
+  screen.renderOrder = 2;
+  scene.add(screen);
+  // 화면 빛 번짐 — 어두운 방을 은은히 비춘다
+  const spill = new THREE.Mesh(new THREE.PlaneGeometry(screenW + 3.4, screenH + 3.4),
+    new THREE.MeshBasicMaterial({ map: projSpillTex, transparent: true, opacity: 0,
+      depthWrite: false, toneMapped: false, blending: THREE.AdditiveBlending }));
+  spill.position.set(screenX + 0.01, screenY, cz); spill.rotation.y = Math.PI / 2;
+  spill.renderOrder = 1;
+  scene.add(spill);
+
+  // 상영실 안내판
+  const sign = textPlane([
+    { text: 'CINEMA · シアター', size: 0.2, weight: 600, spacing: 0.06, color: '#e8e6e1' },
+    { text: '상영실 · 전체 기록 영상', size: 0.12, color: '#b6b2aa' },
+  ], 3.2, 0.9, { bg: '#17181c' });
+  sign.position.set(0, yBase + DOOR_H + 0.8, zFrom + T / 2 + 0.04);
+  scene.add(sign);
+
+  // ── 좌석: 스크린(서쪽)을 향한 벤치 3열, 중앙 통로는 비운다 ──
+  const rowX = [1.4, 2.9, 4.4];
+  const benchZ0 = cz - 3.2, benchZ1 = cz + 3.2;
+  for (const bx of rowX) {
+    for (const side of [-1, 1]) {
+      const z0 = side < 0 ? benchZ0 : 0.9;
+      const seatLen = side < 0 ? (0 - 0.9) - benchZ0 : benchZ1 - 0.9;
+      if (seatLen <= 0.6) continue;
+      const seatCz = z0 + seatLen / 2;
+      const top = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.09, seatLen), woodMat);
+      top.position.set(bx, yBase + 0.42, seatCz); scene.add(top);
+      for (const dz of [-seatLen / 2 + 0.3, seatLen / 2 - 0.3]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.375, 0.08), darkMat);
+        leg.position.set(bx, yBase + 0.1875, seatCz + dz); scene.add(leg);
+      }
+      addCollider(bx, seatCz, 0.5, seatLen, def.floor);
+    }
+  }
+
+  cinemaInfo = { cz, screenX, screenY, viewX: 2.4, roomIdx: rooms.length,
+    screen: new THREE.Vector3(screenX, screenY, cz) };
+
+  /* ── 슬라이드쇼 컨트롤러 ── */
+  const FADE = 0.9;
+  const HOLD_PHOTO = 5.5, PLAY_VIDEO = 10;
+  cinemaCtl = {
+    items: def.items.slice(),
+    i: -1, screen, spill, yBase,
+    tex: null, video: null, vtex: null,
+    pending: null,          // 프리페치된 다음 슬라이드
+    phase: 'idle',          // idle | loading | in | hold | out
+    t: 0, hold: 0, prefetched: false,
+    near: false, wasNear: false,
+
+    setScreenTex(tex, mirror) {
+      // 좌우 반전 보정 (서쪽 벽 스크린)
+      if (mirror && CINEMA_MIRROR) { tex.wrapS = THREE.ClampToEdgeWrapping; tex.repeat.x = -1; tex.offset.x = 1; }
+      screen.material.map = tex;
+      screen.material.color.setHex(0xffffff);
+      screen.material.needsUpdate = true;
+    },
+
+    loadPhoto(item, cb) {
+      const img = new Image();
+      img.onload = () => {
+        const ratio = Math.min(1, CINEMA_MAX_TEX / Math.max(img.width, img.height));
+        const iw = Math.round(img.width * ratio), ih = Math.round(img.height * ratio);
+        const cv = document.createElement('canvas');
+        cv.width = iw; cv.height = ih;
+        const g = cv.getContext('2d');
+        g.fillStyle = '#000'; g.fillRect(0, 0, iw, ih);
+        g.drawImage(img, 0, 0, iw, ih);
+        const tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+        tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+        // 화면비에 맞춰 플레인 스케일 (레터박스)
+        cb({ type: 'photo', tex, aspect: iw / ih });
+      };
+      img.onerror = () => cb(null);
+      img.src = item.file || item.thumb;
+    },
+
+    loadVideo(item, cb) {
+      const v = document.createElement('video');
+      v.src = item.file; v.muted = true; v.loop = true; v.playsInline = true;
+      v.preload = 'auto'; v.crossOrigin = 'anonymous';
+      let done = false;
+      const ready = () => {
+        if (done) return; done = true;
+        const vtex = new THREE.VideoTexture(v);
+        vtex.colorSpace = THREE.SRGBColorSpace;
+        cb({ type: 'video', video: v, vtex, aspect: (v.videoWidth || 16) / (v.videoHeight || 9) });
+      };
+      v.addEventListener('loadeddata', () => {
+        // 중간 지점에서 10초 재생
+        const mid = Math.max(0, (v.duration || 20) / 2 - PLAY_VIDEO / 2);
+        try { v.currentTime = mid; } catch (e) {}
+        ready();
+      }, { once: true });
+      v.addEventListener('error', () => { if (!done) { done = true; cb(null); } });
+    },
+
+    loadNext(cb) {
+      if (!this.items.length) { cb(null); return; }
+      this.i = (this.i + 1) % this.items.length;
+      const item = this.items[this.i];
+      (item.type === 'video' ? this.loadVideo : this.loadPhoto).call(this, item, cb);
+    },
+
+    fitScreen(aspect) {
+      // 스크린 프레임(16:9) 안에 레터박스로 맞춘다
+      const frameA = screenW / screenH;
+      let w = screenW, h = screenH;
+      if (aspect > frameA) h = screenW / aspect; else w = screenH * aspect;
+      screen.geometry.dispose();
+      screen.geometry = new THREE.PlaneGeometry(w, h);
+    },
+
+    install(slot) {
+      // 이전 리소스 해제
+      this.disposeCurrent();
+      if (slot.type === 'photo') {
+        this.tex = slot.tex;
+        this.setScreenTex(slot.tex, true);
+        this.kb = { r0: 1.0, r1: 0.9, px: (this.i % 3) * 0.06, py: ((this.i % 2) ? 0.08 : -0.06) };
+        this.hold = HOLD_PHOTO;
+      } else {
+        this.video = slot.video; this.vtex = slot.vtex;
+        this.setScreenTex(slot.vtex, true);
+        this.video.play().catch(() => {});
+        this.kb = null;
+        this.hold = PLAY_VIDEO;
+      }
+      this.fitScreen(slot.aspect);
+      // 반전 보정은 setScreenTex에서 offset.x/repeat.x를 건드리므로 KB 기준값 저장
+      const t = this.screen.material.map;
+      this.kbBase = { rx: t.repeat.x, ry: t.repeat.y, ox: t.offset.x, oy: t.offset.y };
+      this.phase = 'in'; this.t = 0; this.prefetched = false;
+    },
+
+    applyKenBurns(p) {
+      if (!this.kb || !this.tex) return;
+      const t = this.tex;
+      const r = this.kb.r0 + (this.kb.r1 - this.kb.r0) * p;
+      const sign = (this.kbBase.rx < 0) ? -1 : 1;   // 반전 스크린 보정 유지
+      t.repeat.set(sign * r, r);
+      t.offset.set((sign < 0 ? 1 : 0) + (sign < 0 ? -1 : 1) * ((1 - r) / 2 + this.kb.px * p),
+                   (1 - r) / 2 + this.kb.py * p);
+      // repeat/offset은 텍스처 매트릭스로 자동 반영된다(needsUpdate 건드리면 최초 업로드가 취소됨).
+    },
+
+    disposeCurrent() {
+      if (this.video) { this.video.pause(); this.video.removeAttribute('src'); this.video.load(); this.video = null; }
+      if (this.vtex) { this.vtex.dispose(); this.vtex = null; }
+      if (this.tex) { this.tex.dispose(); this.tex = null; }
+    },
+
+    reset() {
+      this.disposeCurrent();
+      screen.material.opacity = 0; spill.material.opacity = 0;
+      this.phase = 'idle'; this.pending = null;
+    },
+
+    update(dt) {
+      // 근접 여부 (2층, 상영실 근처)
+      const near = player.floor === 1 &&
+        Math.abs(player.pos.z - cz) < L / 2 + 7 && Math.abs(player.pos.x) < W;
+      this.near = near;
+      if (!near) {
+        if (this.wasNear) this.reset();
+        this.wasNear = false;
+        return;
+      }
+      this.wasNear = true;
+
+      if (this.phase === 'idle') {
+        this.phase = 'loading';
+        this.loadNext((slot) => { if (slot && this.near) this.install(slot); else this.phase = 'idle'; });
+        return;
+      }
+      if (this.phase === 'loading') return; // 콜백에서 install → 'in'
+
+      this.t += dt;
+      if (this.phase === 'in') {
+        const p = Math.min(1, this.t / FADE);
+        screen.material.opacity = p;
+        spill.material.opacity = p * 0.42;
+        if (this.kb) this.applyKenBurns(0);
+        if (p >= 1) { this.phase = 'hold'; this.t = 0; }
+      } else if (this.phase === 'hold') {
+        const p = Math.min(1, this.t / this.hold);
+        if (this.kb) this.applyKenBurns(p);
+        // 종료 직전 다음 슬라이드 프리페치
+        if (!this.prefetched && this.t > this.hold - 1.6) {
+          this.prefetched = true;
+          this.loadNext((slot) => { this.pending = slot || null; });
+        }
+        if (this.t >= this.hold) { this.phase = 'out'; this.t = 0; }
+      } else if (this.phase === 'out') {
+        const p = Math.min(1, this.t / FADE);
+        screen.material.opacity = 1 - p;
+        spill.material.opacity = (1 - p) * 0.42;
+        if (p >= 1) {
+          const slot = this.pending; this.pending = null;
+          if (slot) this.install(slot);
+          else { this.phase = 'loading'; this.loadNext((s) => { if (s && this.near) this.install(s); else this.phase = 'idle'; }); }
+        }
+      }
+    },
+  };
+}
+
 function buildMuseum(manifest) {
   const byDay = [[], [], [], []];
   for (const it of manifest.items) byDay[it.day - 1].push(it);
   const dayShort = ['7/12', '7/13', '7/14', '7/15'];
+  const daySegments = []; // 자동 관람: 날짜별 관람 지점 목록 (1–4)
 
   // 방 길이: 작품별 필요 폭의 합이 벽면에 여유(6%) 있게 들어가도록 역산한다.
   // 벽면 길이(pad 2.4, pPad 3.4 기준): 서쪽 L-4.8, 가벽 양면 각 L-7.6, 동쪽 L-4.8.
@@ -668,17 +933,22 @@ function buildMuseum(manifest) {
     const L = Math.max(12, Math.ceil(usePartition ? (need + 24.8) / 4 : (need + 9.6) / 2));
     const floor = i < 2 ? 0 : 1;
     return { type: 'hall', day: i + 1, floor, elevation: floor * FLOOR_HEIGHT,
-      W: HALL_W, L, need, usePartition, label: `${floor + 1}F · ${manifest.days[i]}`, items };
+      W: HALL_W, L, need, usePartition, label: `${floor + 1}F · ${biDay(manifest.days[i])}`, items };
   });
+  // 2층 영상 상영실(시어터) — 우에다 쇼지 미술관의 영상실 오마주.
+  // 전체 사진·영상을 잔잔하게 순환 상영하는 어두운 방. 로비와 Day 4 사이에 둔다.
+  const cinemaDef = { type: 'cinema', floor: 1, elevation: FLOOR_HEIGHT,
+    W: 14, L: 13, label: '2F · CINEMA · シアター', items: manifest.items };
   // Day 3은 동쪽 벽 일부가 계단 개구부에 잘리므로(동쪽 벽 L-12.6) 그만큼 방을 늘린다.
   if (dayDefs[2].usePartition) {
     dayDefs[2].L = Math.max(dayDefs[2].L, Math.ceil((dayDefs[2].need + 32.6) / 4));
   }
   // Day 2의 동쪽 벽은 계단 위쪽 끝(2층 평면 기준)까지만 사용 가능:
   // eastLen = L1 + L2 − (L3 + L4) − 0.6 이므로 필요 길이를 만족하는 L2를 역산.
+  // 2층에 시어터를 끼워 넣어 평면이 길어진 만큼 Day 2도 계단까지 더 늘린다.
   if (dayDefs[1].usePartition) {
     dayDefs[1].L = Math.max(dayDefs[1].L, Math.ceil(
-      (dayDefs[1].need + 20.6 + dayDefs[2].L + dayDefs[3].L - dayDefs[0].L) / 4));
+      (dayDefs[1].need + 20.6 + dayDefs[2].L + dayDefs[3].L + cinemaDef.L - dayDefs[0].L) / 4));
   }
 
   /* ── 1층과 2층을 같은 평면 위에 쌓아 배치 ── */
@@ -688,7 +958,7 @@ function buildMuseum(manifest) {
     [{ type: 'lobby', floor: 0, elevation: 0, W: 16, L: 14, label: '1F · ENTRANCE HALL' },
       dayDefs[0], dayDefs[1]],
     [{ type: 'lobby', floor: 1, elevation: FLOOR_HEIGHT, upper: true,
-       W: 16, L: 14, label: '2F · UPPER HALL' }, dayDefs[3], dayDefs[2]],
+       W: 16, L: 14, label: '2F · UPPER HALL' }, cinemaDef, dayDefs[3], dayDefs[2]],
   ];
   for (const defs of floorDefs) {
     let floorZ = 14;
@@ -759,8 +1029,10 @@ function buildMuseum(manifest) {
     scene.add(roomGroup);
     def.group = roomGroup;
 
-    // 1층의 각 방 천장에는 겹치는 계단실 개구부를 남긴다.
-    const ceilMat = new THREE.MeshBasicMaterial({ color: 0xdedcd7, side: THREE.BackSide });
+    const isCinema = def.type === 'cinema';
+    // 1층의 각 방 천장에는 겹치는 계단실 개구부를 남긴다. 시어터는 어두운 천장.
+    const ceilMat = new THREE.MeshBasicMaterial({
+      color: isCinema ? 0x14151a : 0xdedcd7, side: THREE.BackSide });
     const xEdge = W / 2 + T;
     const ceilingOpenings = def.floor === 0 ? stairways.map(stairOpening) : [];
     const ceilingRects = rectsAroundOpenings(-xEdge, xEdge, zTo, zFrom, ceilingOpenings);
@@ -770,16 +1042,20 @@ function buildMuseum(manifest) {
       ceil.position.set((xa + xb) / 2, yBase + WALL_H - 0.005, (za + zb) / 2);
       scene.add(ceil);
     }
-    // 천장 조명 스트립 (자체발광)
-    const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.8, L - 2),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }));
-    strip.rotation.x = Math.PI / 2; strip.position.set(0, yBase + WALL_H - 0.05, cz);
-    scene.add(strip);
-    const glow = new THREE.Mesh(new THREE.PlaneGeometry(4.5, L - 2), glowMat);
-    glow.rotation.x = Math.PI / 2; glow.position.set(0, yBase + WALL_H - 0.28, cz);
-    glow.renderOrder = 3; scene.add(glow);
+    if (!isCinema) {
+      // 천장 조명 스트립 (자체발광)
+      const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.8, L - 2),
+        new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }));
+      strip.rotation.x = Math.PI / 2; strip.position.set(0, yBase + WALL_H - 0.05, cz);
+      scene.add(strip);
+      const glow = new THREE.Mesh(new THREE.PlaneGeometry(4.5, L - 2), glowMat);
+      glow.rotation.x = Math.PI / 2; glow.position.set(0, yBase + WALL_H - 0.28, cz);
+      glow.renderOrder = 3; scene.add(glow);
+    }
 
-    if (def.type === 'lobby') {
+    if (def.type === 'cinema') {
+      buildCinema(def, roomGroup);
+    } else if (def.type === 'lobby') {
       // 서쪽 벽(타이틀) — 양끝을 남쪽 벽/칸막이 속으로 살짝 밀어넣어 동일 평면 회피
       wallBox(-W / 2 - T / 2, yBase + WALL_H / 2, cz, T, WALL_H, L + 0.2,
         concreteMat(L / 4, WALL_H / 4), true, def.floor);
@@ -805,14 +1081,15 @@ function buildMuseum(manifest) {
       const titleLines = def.upper ? [
         { text: '2F GALLERY', size: 0.32, weight: 500, spacing: 0.08, color: '#2f2f2d' },
         { text: 'DAY 3 · DAY 4', size: 0.18, weight: 400, spacing: 0.05, color: '#55524d' },
-        { text: '2026 국제교류', size: 0.15, color: '#77746e' },
+        { text: '2026 국제교류 · 国際交流', size: 0.15, color: '#77746e' },
       ] : [
-        { text: '요나고미나미고등학교 × 설악고등학교', size: 0.24, weight: 300, spacing: 0.025, color: '#2f2f2d' },
-        { text: '2026 국제교류', size: 0.22, weight: 500, spacing: 0.04, color: '#45423e' },
+        { text: '요나고미나미고등학교 × 설악고등학교', size: 0.21, weight: 300, spacing: 0.02, color: '#2f2f2d' },
+        { text: '米子南高等学校 × 雪岳高等学校', size: 0.165, weight: 300, spacing: 0.05, color: '#45423e' },
+        { text: '2026 국제교류 · 国際交流', size: 0.185, weight: 500, spacing: 0.04, color: '#45423e' },
         { text: 'YONAGO MINAMI HIGH SCHOOL × SEORAK HIGH SCHOOL', size: 0.075, color: '#77746e' },
         { text: '2026. 7. 12 – 15', size: 0.12, color: '#55524d' },
       ];
-      const title = textPlane(titleLines, 7, 2.4);
+      const title = textPlane(titleLines, 7, def.upper ? 2.4 : 2.8);
       title.position.set(-W / 2 + 0.01, yBase + 2.5, cz);
       title.rotation.y = Math.PI / 2;
       scene.add(title);
@@ -986,6 +1263,7 @@ function buildMuseum(manifest) {
       const totalNeed = items.reduce((s, it) => s + widthNeedOf(it), 0);
       const scale = totalLen / totalNeed;
       let assigned = 0;
+      const lineStops = lineList.map(() => []); // 자동 관람: 라인별 감상 지점
       lineList.forEach((line, li) => {
         const isLast = li === lineList.length - 1;
         const placed = [];
@@ -1006,11 +1284,33 @@ function buildMuseum(manifest) {
           // 실제 영상 화면비가 manifest와 달라도 옆 작품을 침범하지 않도록 슬롯 폭을 기억한다.
           art.slotW = widthNeedOf(item) * scale * squeeze;
           fitArtworkToAspect(art, art.aspect);
-          placeArtwork(art, line.slot(squeeze < 1 ? center * squeeze : offset + center));
+          const slot = line.slot(squeeze < 1 ? center * squeeze : offset + center);
+          placeArtwork(art, slot);
           roomGroup.add(art.group);
+          // 감상 지점: 벽면 법선 방향으로 물러난 위치 (영상은 화면이 커서 더 멀리)
+          const viewDist = art.isVideo ? 3.2 : 2.2;
+          lineStops[li].push({
+            x: slot.x + Math.sin(slot.rotY) * viewDist,
+            z: slot.z + Math.cos(slot.rotY) * viewDist,
+            floor: def.floor, art,
+          });
         });
         assigned += placed.length;
       });
+      // 자동 관람 경로 조립: 가벽 서→동 면으로 넘어갈 때는 가벽 끝을 돌아간다.
+      const seg = [];
+      let prevLi = -1;
+      lineList.forEach((line, li) => {
+        const stops = lineStops[li];
+        if (!stops.length) return;
+        if (def.usePartition && prevLi === 1 && li === 2 && seg.length) {
+          const prev = seg[seg.length - 1];
+          seg.push({ x: 0, z: prev.z + Math.sign(prev.z - cz) * 1.9, floor: def.floor });
+        }
+        seg.push(...stops);
+        prevLi = li;
+      });
+      daySegments[def.day] = seg;
 
       // 입구 위 방 이름
       const sign = textPlane([
@@ -1037,6 +1337,39 @@ function buildMuseum(manifest) {
     wallBox(0, last.elevation + WALL_H / 2, last.zTo - T / 2,
       last.W + T * 2, WALL_H, T, concreteMat(last.W / 4, WALL_H / 4), true, last.floor);
   }
+
+  /* ── 자동 관람 전체 경로 ──
+     1F 로비 → Day 1 → Day 2 → 계단(동측) → Day 3 → Day 4 → 2F 로비 → 중앙 계단 하강 → 반복.
+     문과 계단 앞뒤에 경유지를 두어 가벽·난간 충돌체를 피해 다닌다. */
+  const s2 = stairways[1], s1 = PRIMARY_STAIR;
+  const sx2 = (s2.xMin + s2.xMax) / 2, sx1 = (s1.xMin + s1.xMax) / 2;
+  const wp = (x, z, floor) => ({ x, z, floor });
+  tourStops.length = 0;
+  tourStops.push(
+    // 1F 로비 → Day 1 입구
+    wp(0, dayDefs[0].zFrom + 1.3, 0), wp(0, dayDefs[0].zFrom - 1.3, 0),
+    ...daySegments[1],
+    // Day 1 → Day 2 (동측 통로로 북상 후 중앙 문 통과)
+    wp(2.9, dayDefs[0].zTo + 1.8, 0), wp(0, dayDefs[0].zTo + 1.2, 0), wp(0, dayDefs[0].zTo - 1.3, 0),
+    ...daySegments[2],
+    // Day 2 → 계단: 난간 서쪽으로 돌아 계단 하단으로 간 뒤 올라간다
+    wp(1.5, s2.zTop - 1.0, 0), wp(1.5, s2.zBottom + 1.1, 0),
+    wp(sx2, s2.zBottom + 0.85, 0), wp(sx2, s2.zTop - 1.1, 1),
+    ...daySegments[3],
+    // Day 3 → Day 4 (2층, 남쪽 문)
+    wp(2.9, dayDefs[2].zFrom - 1.8, 1), wp(0, dayDefs[2].zFrom - 1.2, 1), wp(0, dayDefs[2].zFrom + 1.3, 1),
+    ...daySegments[4],
+    // Day 4 → 시어터(상영실): 남쪽 문으로 들어가 좌석 뒤(동측)에서 스크린을 감상
+    wp(0, dayDefs[3].zFrom - 1.1, 1), wp(0, dayDefs[3].zFrom + 1.2, 1),
+    wp(5.0, dayDefs[3].zFrom + 1.4, 1),
+    { x: 5.5, z: cinemaInfo.cz, floor: 1, dwell: 45, look: cinemaInfo.screen },
+    // 시어터 → 2F 로비: 좌석 남측으로 빠져 중앙 통로 → 남쪽 문
+    wp(5.2, -0.5, 1), wp(0, -0.5, 1), wp(0, cinemaDef.zFrom + 1.3, 1),
+    // 2F 로비 → 중앙 계단으로 1층 하강
+    wp(sx1, s1.zTop - 0.8, 1), wp(sx1, s1.zBottom + 0.9, 0),
+    // 난간을 피해 서쪽으로 빠져나와 처음(Day 1 입구)으로 순환
+    wp(1.5, s1.zBottom + 1.2, 0)
+  );
 }
 
 /* ═══════════════════ 플레이어 / 컨트롤 ═══════════════════ */
@@ -1050,11 +1383,20 @@ const player = {
 const keys = {};
 let controlsActive = false;
 
+const AUTO_CANCEL_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
 document.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
   if (!e.repeat && controlsActive && !viewerOpen && (e.code === 'Digit1' || e.code === 'Digit2')) {
     switchFloor(e.code === 'Digit1' ? 0 : 1);
+  }
+  if (controlsActive && !viewerOpen && autoTour.active && AUTO_CANCEL_KEYS.includes(e.code)) {
+    stopAutoTour();
+    if (!IS_TOUCH && !document.pointerLockElement) lockPointer(); // 직접 조작으로 복귀
+  }
+  if (!e.repeat && controlsActive && !viewerOpen && e.code === 'KeyT') {
+    autoTour.active ? stopAutoTour() : startAutoTour();
   }
 });
 document.addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -1067,6 +1409,19 @@ const roomLabelEl = document.getElementById('roomLabel');
 const hintEl = document.getElementById('hint');
 const touchUIEl = document.getElementById('touchUI');
 const floorNavEl = document.getElementById('floorNav');
+
+// 하단 안내: 잠시 보여준 뒤 서서히 사라진다.
+let hintFadeTimer = 0;
+function showHint(html) {
+  hintEl.style.transition = '';
+  hintEl.style.opacity = '1';
+  hintEl.innerHTML = html;
+  clearTimeout(hintFadeTimer);
+  hintFadeTimer = setTimeout(() => {
+    hintEl.style.transition = 'opacity 2s';
+    hintEl.style.opacity = '0';
+  }, 5000);
+}
 
 function updateFloorNav(floor) {
   for (const button of floorNavEl.querySelectorAll('button')) {
@@ -1088,6 +1443,7 @@ function stairProgressAt(x, z) {
 function switchFloor(floor, announce = true) {
   const target = floorSpawnPoints[floor];
   if (!target || player.floor === floor && player.pos.distanceToSquared(target) < 0.01) return;
+  if (autoTour.active) stopAutoTour(true); // 층 바로 이동은 수동 조작이므로 자동 관람 해제
   player.floor = floor;
   player.pos.copy(target);
   player.velY = 0; player.onGround = true;
@@ -1097,8 +1453,9 @@ function switchFloor(floor, announce = true) {
   lastRoomCheck = -1e9;
   updateRooms(performance.now());
   if (announce) {
-    hintEl.textContent = floor === 0 ? '1층 · Day 1–2 전시' : '2층 · Day 3–4 전시';
-    hintEl.style.opacity = '1';
+    showHint(floor === 0
+      ? '1층 · Day 1–2 전시<br>1階 · Day 1–2 展示'
+      : '2층 · Day 3–4 전시<br>2階 · Day 3–4 展示');
   }
 }
 
@@ -1123,15 +1480,15 @@ document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === renderer.domElement;
   if (!IS_TOUCH) {
     if (locked) { controlsActive = true; wasLocked = true; }
-    else if (wasLocked && !viewerOpen) {
-      // 락 해제(ESC) → 시작 화면으로
+    else if (wasLocked && !viewerOpen && !autoTour.active) {
+      // 락 해제(ESC) → 시작 화면으로 (자동 관람 중에는 락 없이 계속 관람)
       controlsActive = false;
       startEl.classList.remove('hidden');
       startEl.setAttribute('aria-hidden', 'false');
       startEl.inert = false;
       touchUIEl.setAttribute('aria-hidden', 'true');
       btnJump.disabled = true; btnRun.disabled = true;
-      enterBtn.textContent = '3D 계속';
+      enterBtn.textContent = '3D 계속 · 続ける';
     }
   }
 });
@@ -1151,6 +1508,7 @@ window.addEventListener('mousemove', (e) => {
   if (!drag.on) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.moved += Math.abs(dx) + Math.abs(dy);
+  if (autoTour.active && drag.moved > 24) stopAutoTour(); // 시점 조작 → 자동 관람 해제
   player.yaw -= dx * 0.0035;
   player.pitch -= dy * 0.0035;
   player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch));
@@ -1189,6 +1547,7 @@ if (IS_TOUCH) {
     if (!controlsActive) return;
     for (const t of e.changedTouches) {
       if (t.clientX < window.innerWidth * 0.45 && t.clientY > window.innerHeight * 0.35 && !joy.active) {
+        if (autoTour.active) stopAutoTour(); // 조이스틱 조작 → 자동 관람 해제
         joy.active = true; joy.id = t.identifier;
         joy.cx = t.clientX; joy.cy = t.clientY; joy.dx = joy.dy = 0;
         joyBase.style.display = 'block';
@@ -1217,6 +1576,7 @@ if (IS_TOUCH) {
       } else if (look.active && t.identifier === look.id) {
         const mx = t.clientX - look.lx, my = t.clientY - look.ly;
         look.moved += Math.abs(mx) + Math.abs(my);
+        if (autoTour.active && look.moved > 24) stopAutoTour(); // 시점 드래그 → 자동 관람 해제
         player.yaw -= mx * 0.0042;
         player.pitch -= my * 0.0042;
         player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch));
@@ -1279,8 +1639,109 @@ function updateBgm(dt) {
   if (!bgmOn && bgm.volume < 0.004 && !bgm.paused) bgm.pause();
 }
 
+/* ═══════════════════ 자동 관람 모드 ═══════════════════ */
+// 관람 동선을 따라 아주 천천히 이동하며 작품마다 멈춰 감상한다. 조작하면 해제.
+const autoTour = { active: false, idx: 0, wait: 0, stuck: 0 };
+const autoBtn = document.getElementById('autoBtn');
+const autoEnterBtn = document.getElementById('autoEnterBtn');
+
+function angleLerp(a, b, t) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
+}
+
+function setAutoButtonUI() {
+  autoBtn.setAttribute('aria-pressed', String(autoTour.active));
+  autoBtn.textContent = autoTour.active ? '⏸ 자동 · 自動' : '▶ 자동 · 自動';
+}
+
+function startAutoTour() {
+  if (!tourStops.length || autoTour.active) return;
+  // 현재 위치에서 가장 가까운(같은 층) 지점부터 이어서 관람한다.
+  let best = 0, bestD = Infinity;
+  tourStops.forEach((s, i) => {
+    if (s.floor !== player.floor) return;
+    const d = (s.x - player.pos.x) ** 2 + (s.z - player.pos.z) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  autoTour.active = true;
+  autoTour.idx = best; autoTour.wait = 0; autoTour.stuck = 0;
+  setAutoButtonUI();
+  if (document.pointerLockElement) document.exitPointerLock(); // 자동 관람 중에는 마우스 락 불필요
+  showHint('자동 관람 중 · 조작하면 해제됩니다<br>自動観覧中 · 操作すると解除されます');
+}
+
+function stopAutoTour(silent = false) {
+  if (!autoTour.active) return;
+  autoTour.active = false;
+  setAutoButtonUI();
+  if (!silent) showHint('자동 관람 해제 · 自動観覧を解除しました');
+}
+
+function updateAutoTour(dt) {
+  const stop = tourStops[autoTour.idx];
+  if (!stop) { stopAutoTour(true); return; }
+  const dx = stop.x - player.pos.x, dz = stop.z - player.pos.z;
+  const dist = Math.hypot(dx, dz);
+  let targetYaw = player.yaw, targetPitch = 0;
+
+  const dwells = stop.art || stop.dwell;   // 감상하며 멈추는 지점인가
+  if (dist <= (dwells ? 0.15 : 0.5)) {
+    if (dwells) {
+      autoTour.wait += dt;
+      const need = stop.dwell || (stop.art.isVideo ? AUTO_DWELL_VIDEO : AUTO_DWELL_PHOTO);
+      if (autoTour.wait >= need) {
+        autoTour.wait = 0;
+        autoTour.idx = (autoTour.idx + 1) % tourStops.length;
+      }
+    } else {
+      autoTour.idx = (autoTour.idx + 1) % tourStops.length;
+    }
+  } else {
+    const step = Math.min(dist, AUTO_SPEED * dt);
+    const px = player.pos.x, pz = player.pos.z;
+    player.pos.x += dx / dist * step;
+    player.pos.z += dz / dist * step;
+    resolveCollisions();
+    // 안전장치: 벽에 걸려 2.5초 이상 못 움직이면 목표 지점으로 옮긴다.
+    const moved = Math.hypot(player.pos.x - px, player.pos.z - pz);
+    if (step > 1e-6 && moved < step * 0.25) {
+      autoTour.stuck += dt;
+      if (autoTour.stuck > 2.5) {
+        player.pos.x = stop.x; player.pos.z = stop.z;
+        player.floor = stop.floor;
+        player.pos.y = EYE + player.floor * FLOOR_HEIGHT;
+        player.velY = 0;
+        updateFloorNav(player.floor);
+        autoTour.stuck = 0;
+      }
+    } else autoTour.stuck = 0;
+    targetYaw = Math.atan2(-dx, -dz); // 걷는 방향을 바라본다
+  }
+  // 작품·스크린 근처에서는 그쪽으로 시선을 돌린다.
+  const lookAt = stop.art ? stop.art.pos : stop.look;
+  if (lookAt && dist < (stop.look ? 6.5 : 2.4)) {
+    const ax = lookAt.x - player.pos.x, az = lookAt.z - player.pos.z;
+    const ah = Math.hypot(ax, az);
+    if (ah > 1e-4) {
+      targetYaw = Math.atan2(-ax, -az);
+      targetPitch = Math.atan2(lookAt.y - player.pos.y, ah);
+    }
+  }
+  const t = Math.min(1, dt * 2.2);
+  player.yaw = angleLerp(player.yaw, targetYaw, t);
+  player.pitch += (targetPitch - player.pitch) * t;
+}
+
+autoBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  autoTour.active ? stopAutoTour() : startAutoTour();
+});
+
 /* 입장 버튼 */
-enterBtn.addEventListener('click', () => {
+function enterMuseum(auto = false) {
   startBgm(); // 사용자 제스처 시점이라 자동재생 정책에 걸리지 않는다.
   document.body.classList.add('playing');
   startEl.classList.add('hidden');
@@ -1289,13 +1750,17 @@ enterBtn.addEventListener('click', () => {
   crosshairEl.style.display = IS_TOUCH ? 'none' : 'block';
   roomLabelEl.style.display = 'block';
   hintEl.style.display = 'block';
-  hintEl.textContent = IS_TOUCH ? '사진을 탭하면 크게 볼 수 있습니다' : '사진을 클릭하면 크게 볼 수 있습니다';
-  setTimeout(() => { hintEl.style.opacity = '0'; hintEl.style.transition = 'opacity 2s'; }, 5000);
+  showHint(IS_TOUCH
+    ? '사진을 탭하면 크게 볼 수 있습니다<br>写真をタップすると拡大できます'
+    : '사진을 클릭하면 크게 볼 수 있습니다<br>写真をクリックすると拡大できます');
   controlsActive = true;
   touchUIEl.setAttribute('aria-hidden', String(!IS_TOUCH));
   btnJump.disabled = !IS_TOUCH; btnRun.disabled = !IS_TOUCH;
-  if (!IS_TOUCH) lockPointer();
-});
+  if (auto) startAutoTour();
+  else if (!IS_TOUCH) lockPointer();
+}
+enterBtn.addEventListener('click', () => enterMuseum(false));
+autoEnterBtn.addEventListener('click', () => enterMuseum(true));
 
 /* ═══════════════════ 사진 확대 뷰어 ═══════════════════ */
 const viewerEl = document.getElementById('viewer');
@@ -1322,12 +1787,12 @@ function openViewer(art, trigger = null) {
     if (art.video) art.video.pause();
     const v = document.createElement('video');
     v.src = art.item.file; v.controls = true; v.autoplay = true; v.playsInline = true;
-    v.setAttribute('aria-label', `${art.dayLabel} 영상 No.${String(art.idxInDay).padStart(3, '0')}`);
+    v.setAttribute('aria-label', `${art.dayLabel} 영상·映像 No.${String(art.idxInDay).padStart(3, '0')}`);
     viewerBody.appendChild(v);
   } else {
     const im = document.createElement('img');
     im.src = art.item.file;
-    im.alt = `${art.dayLabel} 사진 No.${String(art.idxInDay).padStart(3, '0')}`;
+    im.alt = `${art.dayLabel} 사진·写真 No.${String(art.idxInDay).padStart(3, '0')}`;
     viewerBody.appendChild(im);
   }
   viewerCap.textContent = `${art.dayLabel}  ·  No.${String(art.idxInDay).padStart(3, '0')}`;
@@ -1348,7 +1813,7 @@ function closeViewer() {
     galleryPanel.inert = false;
     galleryPanel.setAttribute('aria-hidden', 'false');
   }
-  if (!IS_TOUCH && controlsActive) lockPointer();
+  if (!IS_TOUCH && controlsActive && !autoTour.active) lockPointer();
   else if (viewerReturnFocus && typeof viewerReturnFocus.focus === 'function') viewerReturnFocus.focus();
   viewerReturnFocus = null;
 }
@@ -1402,8 +1867,8 @@ function closeGallery() {
 function build2DGallery(manifest) {
   galleryFilters.replaceChildren();
   galleryGrid.replaceChildren();
-  const filterDefs = [{ day: 0, label: '전체' }, ...manifest.days.map((label, i) => ({
-    day: i + 1, label: `${i < 2 ? '1F' : '2F'} · ${label}`,
+  const filterDefs = [{ day: 0, label: '전체 · すべて' }, ...manifest.days.map((label, i) => ({
+    day: i + 1, label: `${i < 2 ? '1F' : '2F'} · ${biDay(label)}`,
   }))];
   for (const def of filterDefs) {
     const button = document.createElement('button');
@@ -1430,7 +1895,7 @@ function build2DGallery(manifest) {
     const image = document.createElement('img');
     image.loading = 'lazy'; image.decoding = 'async';
     image.src = art.item.thumb || art.item.file;
-    image.alt = `${art.dayLabel} ${art.isVideo ? '영상' : '사진'} No.${String(art.idxInDay).padStart(3, '0')}`;
+    image.alt = `${art.dayLabel} ${art.isVideo ? '영상·映像' : '사진·写真'} No.${String(art.idxInDay).padStart(3, '0')}`;
     const meta = document.createElement('span');
     meta.className = 'galleryCardMeta';
     const label = document.createElement('span');
@@ -1597,31 +2062,36 @@ function resolveCollisions() {
 
 function updatePlayer(dt) {
   if (!controlsActive) return;
-  // 입력 → 이동 방향
-  let ix = 0, iz = 0;
-  if (keys['KeyW'] || keys['ArrowUp']) iz -= 1;
-  if (keys['KeyS'] || keys['ArrowDown']) iz += 1;
-  if (keys['KeyA'] || keys['ArrowLeft']) ix -= 1;
-  if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
-  if (joy.active) { ix += joy.dx; iz += joy.dy; }
+  if (autoTour.active) {
+    // 자동 관람: 경로를 따라 천천히 이동·감상 (수평 이동과 시선은 여기서 처리)
+    updateAutoTour(dt);
+  } else {
+    // 입력 → 이동 방향
+    let ix = 0, iz = 0;
+    if (keys['KeyW'] || keys['ArrowUp']) iz -= 1;
+    if (keys['KeyS'] || keys['ArrowDown']) iz += 1;
+    if (keys['KeyA'] || keys['ArrowLeft']) ix -= 1;
+    if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
+    if (joy.active) { ix += joy.dx; iz += joy.dy; }
 
-  const len = Math.hypot(ix, iz);
-  if (len > 1) { ix /= len; iz /= len; }
+    const len = Math.hypot(ix, iz);
+    if (len > 1) { ix /= len; iz /= len; }
 
-  const running = keys['ShiftLeft'] || keys['ShiftRight'] || player.running;
-  const speed = running ? RUN : WALK;
+    const running = keys['ShiftLeft'] || keys['ShiftRight'] || player.running;
+    const speed = running ? RUN : WALK;
 
-  const sin = Math.sin(player.yaw), cos = Math.cos(player.yaw);
-  // 카메라 기준 이동 (yaw만 적용)
-  const mx = (ix * cos + iz * sin) * speed * dt;
-  const mz = (iz * cos - ix * sin) * speed * dt;
-  player.pos.x += mx;
-  player.pos.z += mz;
-  resolveCollisions();
+    const sin = Math.sin(player.yaw), cos = Math.cos(player.yaw);
+    // 카메라 기준 이동 (yaw만 적용)
+    const mx = (ix * cos + iz * sin) * speed * dt;
+    const mz = (iz * cos - ix * sin) * speed * dt;
+    player.pos.x += mx;
+    player.pos.z += mz;
+    resolveCollisions();
 
-  // 점프 / 중력
-  if ((keys['Space']) && player.onGround) {
-    player.velY = JUMP_V; player.onGround = false;
+    // 점프
+    if ((keys['Space']) && player.onGround) {
+      player.velY = JUMP_V; player.onGround = false;
+    }
   }
   player.velY -= GRAVITY * dt;
   player.pos.y += player.velY * dt;
@@ -1679,13 +2149,16 @@ async function init() {
     player.pos.copy(spawnPoint);
     camera.position.copy(player.pos);
     camera.rotation.set(0, player.yaw, 0);
-    loadNote.textContent = `사진 ${manifest.items.filter(i => i.type === 'photo').length}점 · 영상 ${manifest.items.filter(i => i.type === 'video').length}점 전시 중`;
+    const nPhoto = manifest.items.filter(i => i.type === 'photo').length;
+    const nVideo = manifest.items.filter(i => i.type === 'video').length;
+    loadNote.textContent = `사진 ${nPhoto}점 · 영상 ${nVideo}점 전시 중 · 写真${nPhoto}点・映像${nVideo}点を展示中`;
     enterBtn.disabled = false;
     galleryBtn.disabled = false;
+    autoEnterBtn.disabled = false;
     lastRoomCheck = -1e9;
     updateRooms(performance.now()); // 초기 로딩 킥
   } catch (err) {
-    loadNote.textContent = '전시 준비 중입니다 — 에셋 변환이 끝나면 새로고침해 주세요. (' + err.message + ')';
+    loadNote.textContent = '전시 준비 중입니다 — 새로고침해 주세요 · 展示準備中です — 再読み込みしてください (' + err.message + ')';
     console.error(err);
   }
 }
@@ -1697,6 +2170,7 @@ function loop() {
   updatePlayer(dt);
   updateRooms(performance.now());
   updateBgm(dt);
+  if (cinemaCtl) cinemaCtl.update(dt);
   renderer.render(scene, camera);
 }
 
@@ -1705,11 +2179,13 @@ loop();
 
 // 개발용 디버그 핸들
 window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera,
+  tourStops, autoTour, startAutoTour, stopAutoTour,
+  get cinema() { return cinemaCtl; },
   get room() { return currentRoomIdx; },
   tp(x, z, yaw) { player.pos.set(x, EYE + player.floor * FLOOR_HEIGHT, z); player.yaw = yaw; player.pitch = 0; },
   floor(n) { switchFloor(Math.max(0, Math.min(1, n))); },
-  step() { // rAF가 멈춘 환경에서 수동 프레임 진행 (테스트용)
-    updatePlayer(1 / 60);
+  step(n = 1) { // rAF가 멈춘 환경에서 수동 프레임 진행 (테스트용)
+    for (let i = 0; i < n; i++) { updatePlayer(1 / 60); if (cinemaCtl) cinemaCtl.update(1 / 60); }
     lastRoomCheck = -1e9;
     updateRooms(performance.now());
     camera.position.copy(player.pos);

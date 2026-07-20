@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>요나고미나미고등학교 설악고등학교 2026 국제교류</title>
+<title>요나고미나미고등학교 설악고등학교 2026 국제교류 · 米子南高等学校×雪岳高等学校 2026国際交流</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #14161a; }
-  body { font-family: "Helvetica Neue", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  body { font-family: "Helvetica Neue", "Apple SD Gothic Neo", "Hiragino Kaku Gothic ProN", "Noto Sans KR", "Noto Sans JP", "Yu Gothic", sans-serif; }
   #app { position: fixed; inset: 0; }
   canvas { display: block; touch-action: none; }
   [hidden] { display: none !important; }
@@ -27,6 +27,10 @@
     max-width: 960px; font-size: clamp(20px, 4vw, 36px); line-height: 1.45;
     letter-spacing: .12em; text-wrap: balance; word-break: keep-all; font-weight: 300;
   }
+  #start .jaLine {
+    display: block; font-size: .52em; color: #b9b5ac; margin-top: 12px;
+    letter-spacing: .14em; font-weight: 300;
+  }
   #start .ko { font-size: clamp(13px, 3vw, 17px); letter-spacing: .18em; color: #b9b5ac; margin-bottom: 6px; }
   #start .line { width: 56px; height: 1px; background: #8b867c; margin: 10px 0 16px; }
   #start .help {
@@ -36,14 +40,14 @@
   }
   #start .help b { color: #e8e6e1; font-weight: 600; }
   #startActions { margin-top: 26px; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
-  #enterBtn, #galleryBtn {
+  #enterBtn, #galleryBtn, #autoEnterBtn {
     padding: 14px 38px; font-size: 14px; letter-spacing: .18em; text-indent: .18em;
     color: #14161a; background: #e8e6e1; border: none; border-radius: 999px; cursor: pointer;
     transition: transform .15s ease, background .15s ease;
   }
-  #galleryBtn { color: #e8e6e1; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.28); }
-  #enterBtn:hover, #galleryBtn:hover { background: #fff; color: #14161a; transform: translateY(-1px); }
-  #enterBtn:disabled, #galleryBtn:disabled { opacity: .4; cursor: wait; }
+  #galleryBtn, #autoEnterBtn { color: #e8e6e1; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.28); }
+  #enterBtn:hover, #galleryBtn:hover, #autoEnterBtn:hover { background: #fff; color: #14161a; transform: translateY(-1px); }
+  #enterBtn:disabled, #galleryBtn:disabled, #autoEnterBtn:disabled { opacity: .4; cursor: wait; }
   #loadNote { font-size: 11px; color: #aaa69d; margin-top: 14px; letter-spacing: .1em; }
 
   /* ── HUD ──────────────────────────────── */
@@ -63,7 +67,8 @@
   #hint {
     position: fixed; bottom: calc(16px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
     z-index: 10; color: rgba(255,255,255,.55); font-size: 11px; letter-spacing: .12em;
-    display: none; pointer-events: none; white-space: nowrap;
+    display: none; pointer-events: none; white-space: normal;
+    width: max-content; max-width: 92vw; text-align: center; line-height: 1.8;
   }
   #floorNav {
     position: fixed; top: calc(14px + env(safe-area-inset-top)); right: 16px; z-index: 12;
@@ -71,14 +76,19 @@
     border-radius: 999px; background: rgba(20,22,26,.5); backdrop-filter: blur(8px);
   }
   body.playing #floorNav { display: flex; }
-  #bgmBtn {
+  #hudLeft {
     position: fixed; top: calc(14px + env(safe-area-inset-top)); left: 16px; z-index: 12;
-    display: none; padding: 8px 15px; border: 1px solid rgba(255,255,255,.2);
+    display: none; gap: 8px;
+  }
+  body.playing #hudLeft { display: flex; }
+  #hudLeft button {
+    padding: 8px 15px; border: 1px solid rgba(255,255,255,.2);
     border-radius: 999px; background: rgba(20,22,26,.5); backdrop-filter: blur(8px);
     color: rgba(255,255,255,.7); font-size: 11.5px; letter-spacing: .08em; cursor: pointer;
   }
-  body.playing.has-bgm #bgmBtn { display: block; }
-  #bgmBtn[aria-pressed="true"] { color: #17191d; background: #f0eee9; }
+  #bgmBtn { display: none; }
+  body.has-bgm #bgmBtn { display: block; }
+  #hudLeft button[aria-pressed="true"] { color: #17191d; background: #f0eee9; }
   #floorNav button {
     min-width: 58px; padding: 7px 10px; border: 0; border-radius: 999px; cursor: pointer;
     color: rgba(255,255,255,.7); background: transparent; font-size: 11px; letter-spacing: .08em;
@@ -159,7 +169,7 @@
 
   @media (max-width: 520px) {
     #startActions { flex-direction: column; width: min(280px, 90vw); }
-    #enterBtn, #galleryBtn { width: 100%; }
+    #enterBtn, #galleryBtn, #autoEnterBtn { width: 100%; }
     #galleryGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -171,52 +181,56 @@
 <div id="app"></div>
 
 <main id="start" aria-labelledby="museumTitle">
-  <h1 class="jp" id="museumTitle">요나고미나미고등학교 설악고등학교 2026 국제교류</h1>
-  <p class="ko">우에다 쇼지 사진미술관 콘셉트 · 2026. 7. 12 – 15</p>
+  <h1 class="jp" id="museumTitle">요나고미나미고등학교 설악고등학교 2026 국제교류<span class="jaLine" lang="ja">米子南高等学校 × 雪岳高等学校 2026 国際交流</span></h1>
+  <p class="ko">우에다 쇼지 사진미술관 콘셉트 · <span lang="ja">植田正治写真美術館コンセプト</span> · 2026. 7. 12 – 15</p>
   <div class="line"></div>
   <div class="help" id="helpDesktop">
-    <b>W A S D</b> · 이동 &nbsp;&nbsp; <b>마우스</b> · 시점 &nbsp;&nbsp; <b>SHIFT</b> · 달리기<br>
-    <b>SPACE</b> · 점프 &nbsp;&nbsp; <b>클릭</b> · 사진 감상 &nbsp;&nbsp; <b>1 / 2</b> · 층 바로 이동 &nbsp;&nbsp; <b>ESC</b> · 마우스 해제
+    <b>W A S D</b> · 이동 · 移動 &nbsp;&nbsp; <b>마우스</b> · 시점 · 視点 &nbsp;&nbsp; <b>SHIFT</b> · 달리기 · 走る &nbsp;&nbsp; <b>SPACE</b> · 점프 · ジャンプ<br>
+    <b>클릭</b> · 사진 감상 · 写真鑑賞 &nbsp;&nbsp; <b>1 / 2</b> · 층 이동 · 階移動 &nbsp;&nbsp; <b>T</b> · 자동 관람 · 自動観覧 &nbsp;&nbsp; <b>ESC</b> · 마우스 해제 · マウス解除
   </div>
   <div class="help" id="helpTouch" style="display:none">
-    <b>왼쪽 조이스틱</b> · 이동 &nbsp;&nbsp; <b>오른쪽 드래그</b> · 시점<br>
-    <b>JUMP</b> · 점프 &nbsp;&nbsp; <b>RUN</b> · 달리기 &nbsp;&nbsp; <b>1F / 2F</b> · 층 바로 이동 &nbsp;&nbsp; <b>사진 탭</b> · 감상
+    <b>왼쪽 조이스틱</b> · 이동 · 移動 &nbsp;&nbsp; <b>오른쪽 드래그</b> · 시점 · 視点<br>
+    <b>JUMP</b> · 점프 · ジャンプ &nbsp;&nbsp; <b>RUN</b> · 달리기 · 走る &nbsp;&nbsp; <b>1F / 2F</b> · 층 이동 · 階移動 &nbsp;&nbsp; <b>사진 탭</b> · 감상 · 鑑賞
   </div>
   <div id="startActions">
-    <button id="enterBtn" type="button" disabled>3D 입장</button>
-    <button id="galleryBtn" type="button" disabled>2D 사진 목록</button>
+    <button id="enterBtn" type="button" disabled>3D 입장 · 入場</button>
+    <button id="autoEnterBtn" type="button" disabled>자동 관람 · 自動観覧</button>
+    <button id="galleryBtn" type="button" disabled>2D 사진 목록 · 写真リスト</button>
   </div>
-  <div id="loadNote" role="status" aria-live="polite">미술관을 준비하는 중…</div>
+  <div id="loadNote" role="status" aria-live="polite">미술관을 준비하는 중… · 美術館を準備しています…</div>
 </main>
 
 <div id="crosshair" aria-hidden="true"></div>
 <div id="roomLabel" aria-live="polite"></div>
 <div id="hint" aria-live="polite"></div>
-<nav id="floorNav" aria-label="전시층 이동">
-  <button type="button" data-floor="0" aria-pressed="true">1F · 1–2일</button>
-  <button type="button" data-floor="1" aria-pressed="false">2F · 3–4일</button>
+<nav id="floorNav" aria-label="전시층 이동 · フロア移動">
+  <button type="button" data-floor="0" aria-pressed="true">1F · DAY 1–2</button>
+  <button type="button" data-floor="1" aria-pressed="false">2F · DAY 3–4</button>
 </nav>
-<button id="bgmBtn" type="button" aria-pressed="false" aria-label="배경 음악 켜기·끄기">♪ BGM</button>
+<div id="hudLeft">
+  <button id="autoBtn" type="button" aria-pressed="false" aria-label="자동 관람 켜기·끄기 · 自動観覧のオン・オフ">▶ 자동 · 自動</button>
+  <button id="bgmBtn" type="button" aria-pressed="false" aria-label="배경 음악 켜기·끄기 · BGMのオン・オフ">♪ BGM</button>
+</div>
 
 <div id="viewer" role="dialog" aria-modal="true" aria-labelledby="viewerCap" aria-hidden="true" tabindex="-1">
-  <button id="viewerClose" type="button" aria-label="확대 보기 닫기">✕</button>
+  <button id="viewerClose" type="button" aria-label="확대 보기 닫기 · 拡大表示を閉じる">✕</button>
   <div id="viewerBody"></div>
   <div id="viewerCap"></div>
 </div>
 
 <section id="galleryPanel" role="dialog" aria-modal="true" aria-labelledby="galleryTitle" aria-hidden="true" hidden>
   <header class="galleryHeader">
-    <h2 id="galleryTitle">2026 국제교류 사진 목록</h2>
-    <button id="galleryClose" class="iconButton" type="button" aria-label="2D 사진 목록 닫기">✕</button>
+    <h2 id="galleryTitle">2026 국제교류 사진 목록 · <span lang="ja">写真リスト</span></h2>
+    <button id="galleryClose" class="iconButton" type="button" aria-label="2D 사진 목록 닫기 · 写真リストを閉じる">✕</button>
   </header>
-  <nav id="galleryFilters" aria-label="날짜별 작품 필터"></nav>
+  <nav id="galleryFilters" aria-label="날짜별 작품 필터 · 日付フィルター"></nav>
   <div id="galleryGrid" role="list"></div>
 </section>
 
 <div id="touchUI" aria-hidden="true">
   <div id="joyBase" aria-hidden="true"><div id="joyStick"></div></div>
-  <button class="tbtn" id="btnRun" type="button" aria-label="달리기 전환" aria-pressed="false" disabled>RUN</button>
-  <button class="tbtn" id="btnJump" type="button" aria-label="점프" disabled>JUMP</button>
+  <button class="tbtn" id="btnRun" type="button" aria-label="달리기 전환 · 走る切替" aria-pressed="false" disabled>RUN</button>
+  <button class="tbtn" id="btnJump" type="button" aria-label="점프 · ジャンプ" disabled>JUMP</button>
 </div>
 
 <script type="importmap">

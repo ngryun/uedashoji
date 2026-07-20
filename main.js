@@ -938,14 +938,30 @@ function buildStandee(x, z, floor, faceX, faceZ, charHeight = 1.5) {
   const tex = new THREE.TextureLoader().load('assets/seolibeoli.png', (t) => {
     t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
   });
-  const mat = new THREE.MeshStandardMaterial({
-    map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
+  const frontMat = new THREE.MeshStandardMaterial({
+    map: tex, transparent: true, alphaTest: 0.5, side: THREE.FrontSide,
     roughness: 0.9, metalness: 0, envMapIntensity: 0.4,
   });
-  const cutout = new THREE.Mesh(new THREE.PlaneGeometry(planeW, planeH), mat);
+  const cutoutGeo = new THREE.PlaneGeometry(planeW, planeH);
+  const cutout = new THREE.Mesh(cutoutGeo, frontMat);
   cutout.position.y = bottomGap + planeH / 2;
-  cutout.renderOrder = 1;
+  cutout.position.z = 0.006;
+  cutout.renderOrder = 2;
   group.add(cutout);
+
+  // 투명 윤곽을 뒤로 여러 겹 쌓아 얇은 합판처럼 보이는 단면과 뒷면을 만든다.
+  const standeeDepth = 0.06;
+  const edgeLayers = 6;
+  const edgeMat = new THREE.MeshStandardMaterial({
+    map: tex, color: 0x5a5046, transparent: true, alphaTest: 0.5,
+    side: THREE.DoubleSide, roughness: 0.96, metalness: 0,
+  });
+  for (let i = 1; i <= edgeLayers; i++) {
+    const edge = new THREE.Mesh(cutoutGeo, edgeMat);
+    edge.position.set(0, bottomGap + planeH / 2, -standeeDepth * i / edgeLayers);
+    edge.renderOrder = 1;
+    group.add(edge);
+  }
 
   // 받침대(원형)
   const baseR = Math.max(0.44, charHeight * 0.34);
@@ -1132,7 +1148,7 @@ function buildMuseum(manifest) {
         { text: '2026 국제교류 · 国際交流', size: 0.15, color: '#77746e' },
       ] : [
         { text: '요나고미나미고등학교 × 설악고등학교', size: 0.21, weight: 300, spacing: 0.02, color: '#2f2f2d' },
-        { text: '米子南高等学校 × 雪岳高等学校', size: 0.165, weight: 300, spacing: 0.05, color: '#45423e' },
+        { text: '米子南高等学校 × 雪嶽高等学校', size: 0.165, weight: 300, spacing: 0.05, color: '#45423e' },
         { text: '2026 국제교류 · 国際交流', size: 0.185, weight: 500, spacing: 0.04, color: '#45423e' },
         { text: 'YONAGO MINAMI HIGH SCHOOL × SEORAK HIGH SCHOOL', size: 0.075, color: '#77746e' },
         { text: '2026. 7. 12 – 15', size: 0.12, color: '#55524d' },

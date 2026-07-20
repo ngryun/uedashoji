@@ -1831,20 +1831,22 @@ function photoIdOf(art) {
 }
 let likeUnsub = null;
 let likeBusy = false;
+let currentLikeId = null;
 function refreshLikeHeart(id) {
   viewerLike.setAttribute('aria-pressed', String(Social.hasLiked(id)));
 }
 function bindLike(art) {
   const id = photoIdOf(art);
+  currentLikeId = id;
   refreshLikeHeart(id);
   viewerLikeCount.textContent = '·';
-  if (likeUnsub) likeUnsub();
-  likeUnsub = Social.watchLikes(id, (count) => { viewerLikeCount.textContent = count; });
+  if (likeUnsub) { likeUnsub(); likeUnsub = null; }
   viewerLike.onclick = async () => {
     if (likeBusy) return;
     likeBusy = true; viewerLike.disabled = true;
     const willLike = !Social.hasLiked(id);
     try {
+      await Social.initSocial();          // Firebase 지연 로딩(최초 1회)
       await Social.toggleLike(id);
       refreshLikeHeart(id);
       // 낙관적 카운트 갱신 (로컬 모드엔 실시간 콜백이 없고, Firebase는 스냅샷이 곧 확정한다)
@@ -1853,8 +1855,16 @@ function bindLike(art) {
     } catch (err) { console.warn('좋아요 실패', err); }
     finally { likeBusy = false; viewerLike.disabled = false; }
   };
+  // Firebase는 필요할 때 로드한다. 준비되면 실시간 좋아요 수를 구독한다.
+  Social.initSocial().then(() => {
+    if (!viewerOpen || currentLikeId !== id) return;   // 그 사이 뷰어가 닫히거나 바뀜
+    likeUnsub = Social.watchLikes(id, (count) => {
+      if (currentLikeId === id) viewerLikeCount.textContent = count;
+    });
+  });
 }
 function unbindLike() {
+  currentLikeId = null;
   if (likeUnsub) { likeUnsub(); likeUnsub = null; }
   viewerLike.onclick = null;
 }
@@ -2120,8 +2130,6 @@ guestbookClose.addEventListener('click', closeGuestbook);
 guestbookPanel.addEventListener('keydown', (e) => {
   if (e.code === 'Escape') { e.preventDefault(); closeGuestbook(); }
 });
-
-Social.initSocial();
 
 /* 레이캐스트로 작품 찾기 */
 const raycaster = new THREE.Raycaster();

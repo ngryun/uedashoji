@@ -27,9 +27,11 @@ jobs:
       - name: Prepare public site
         run: |
           mkdir -p _site
-          cp index.html main.js manifest.json .nojekyll _site/
+          cp index.html main.js social.js firebase-config.js manifest.json .nojekyll _site/
           cp -R lib assets _site/
           test -f _site/index.html
+          test -f _site/social.js
+          test -f _site/firebase-config.js
           test ! -e _site/assets/.source-map
 
       - name: Upload Pages artifact

@@ -38,6 +38,8 @@ node tools/serve.mjs
 ```
 index.html        진입점 (시작 화면, HUD, 모바일 UI)
 main.js           Three.js 앱 (건축·물리·컨트롤·지연로딩)
+social.js         방명록·좋아요 데이터 계층 (Firebase/로컬 저장)
+firebase-config.js  Firebase 웹 앱 설정
 manifest.json     사진/영상 목록 (tools/convert.sh가 생성)
 lib/three.module.js  Three.js r166 (로컬 사본, 오프라인 작동)
 assets/photos/    확대 감상용 JPEG (최대 1600px)

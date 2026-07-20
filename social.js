@@ -5,6 +5,7 @@
 import { firebaseConfig, FIREBASE_ENABLED } from './firebase-config.js';
 
 const FB_VERSION = '10.12.5';
+const FB_INIT_TIMEOUT_MS = 8000;
 const LS_LIKED = 'guest.liked.v1';        // 이 브라우저가 누른 좋아요 {id:1}
 const LS_LIKECOUNT = 'guest.likeCount.v1'; // 로컬 모드 좋아요 수 {id:n}
 const LS_GUEST = 'guest.guestbook.v1';     // 로컬 모드 방명록 [entry]
@@ -23,8 +24,17 @@ export function initSocial() {
       firebaseConfig && !String(firebaseConfig.apiKey || '').startsWith('PASTE');
     if (!configured) { mode = 'local'; return mode; }
     try {
-      const appMod = await import(`https://www.gstatic.com/firebasejs/${FB_VERSION}/firebase-app.js`);
-      const fs = await import(`https://www.gstatic.com/firebasejs/${FB_VERSION}/firebase-firestore.js`);
+      const modules = Promise.all([
+        import(`https://www.gstatic.com/firebasejs/${FB_VERSION}/firebase-app.js`),
+        import(`https://www.gstatic.com/firebasejs/${FB_VERSION}/firebase-firestore.js`),
+      ]);
+      const [appMod, fs] = await Promise.race([
+        modules,
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error('Firebase 초기화 시간 초과')),
+          FB_INIT_TIMEOUT_MS,
+        )),
+      ]);
       const app = appMod.initializeApp(firebaseConfig);
       const db = fs.getFirestore(app);
       fb = { db, ...fs };

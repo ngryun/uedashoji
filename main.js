@@ -2029,6 +2029,7 @@ const gbStatus = document.getElementById('gbStatus');
 const gbMode = document.getElementById('gbMode');
 const gbEmpty = document.getElementById('gbEmpty');
 let gbReturnFocus = null, gbFromStart = true, gbControlsBefore = false, gbUnsub = null;
+let gbOpenSeq = 0;
 
 function fmtTime(ms) {
   const d = new Date(ms); const p = (n) => String(n).padStart(2, '0');
@@ -2056,7 +2057,8 @@ function renderGuestbook(entries) {
   }
 }
 
-function openGuestbook() {
+async function openGuestbook() {
+  const openSeq = ++gbOpenSeq;
   gbReturnFocus = document.activeElement;
   gbFromStart = !startEl.classList.contains('hidden');
   gbControlsBefore = controlsActive;
@@ -2064,17 +2066,24 @@ function openGuestbook() {
   if (document.pointerLockElement) document.exitPointerLock();
   if (gbFromStart) { startEl.setAttribute('aria-hidden', 'true'); startEl.inert = true; }
   touchUIEl.setAttribute('aria-hidden', 'true');
-  gbMode.textContent = Social.getMode() === 'firebase'
-    ? '모든 관람객과 실시간으로 공유됩니다 · みんなとリアルタイムで共有されます'
-    : '지금은 이 브라우저에만 저장됩니다 (Firebase 미설정) · この端末のみに保存中';
   guestbookPanel.hidden = false;
   guestbookPanel.setAttribute('aria-hidden', 'false');
-  if (gbUnsub) gbUnsub();
-  gbUnsub = Social.watchGuestbook(renderGuestbook);
+  if (gbUnsub) { gbUnsub(); gbUnsub = null; }
+  gbSubmit.disabled = true;
+  gbMode.textContent = '방명록에 연결하는 중… · ゲストブックに接続中…';
   guestbookClose.focus();
+
+  await Social.initSocial();
+  if (guestbookPanel.hidden || openSeq !== gbOpenSeq) return;
+  gbMode.textContent = Social.getMode() === 'firebase'
+    ? '모든 관람객과 실시간으로 공유됩니다 · みんなとリアルタイムで共有されます'
+    : '지금은 이 브라우저에만 저장됩니다 · この端末のみに保存中';
+  gbUnsub = Social.watchGuestbook(renderGuestbook);
+  gbSubmit.disabled = false;
 }
 
 function closeGuestbook() {
+  gbOpenSeq++;
   if (gbUnsub) { gbUnsub(); gbUnsub = null; }
   guestbookPanel.hidden = true;
   guestbookPanel.setAttribute('aria-hidden', 'true');
@@ -2104,6 +2113,7 @@ guestbookForm.addEventListener('submit', async (e) => {
   }
   gbSubmit.disabled = true;
   try {
+    await Social.initSocial();
     await Social.addGuestbookEntry({ name, school, message });
     gbMessage.value = ''; gbCount.textContent = '0 / 500';
     gbStatus.className = '';

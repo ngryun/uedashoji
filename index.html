@@ -40,14 +40,14 @@
   }
   #start .help b { color: #e8e6e1; font-weight: 600; }
   #startActions { margin-top: 26px; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
-  #enterBtn, #galleryBtn, #autoEnterBtn {
+  #enterBtn, #galleryBtn, #autoEnterBtn, #guestbookBtn {
     padding: 14px 38px; font-size: 14px; letter-spacing: .18em; text-indent: .18em;
     color: #14161a; background: #e8e6e1; border: none; border-radius: 999px; cursor: pointer;
     transition: transform .15s ease, background .15s ease;
   }
-  #galleryBtn, #autoEnterBtn { color: #e8e6e1; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.28); }
-  #enterBtn:hover, #galleryBtn:hover, #autoEnterBtn:hover { background: #fff; color: #14161a; transform: translateY(-1px); }
-  #enterBtn:disabled, #galleryBtn:disabled, #autoEnterBtn:disabled { opacity: .4; cursor: wait; }
+  #galleryBtn, #autoEnterBtn, #guestbookBtn { color: #e8e6e1; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.28); }
+  #enterBtn:hover, #galleryBtn:hover, #autoEnterBtn:hover, #guestbookBtn:hover { background: #fff; color: #14161a; transform: translateY(-1px); }
+  #enterBtn:disabled, #galleryBtn:disabled, #autoEnterBtn:disabled, #guestbookBtn:disabled { opacity: .4; cursor: wait; }
   #loadNote { font-size: 11px; color: #aaa69d; margin-top: 14px; letter-spacing: .1em; }
 
   /* ── HUD ──────────────────────────────── */
@@ -106,7 +106,19 @@
     max-width: 94vw; max-height: 84vh; object-fit: contain;
     box-shadow: 0 20px 80px rgba(0,0,0,.7); border: 6px solid #f2f0eb; background: #222;
   }
+  #viewerBar { display: flex; align-items: center; gap: 16px; }
   #viewerCap { color: #b9b5ac; font-size: 12px; letter-spacing: .2em; }
+  #viewerLike {
+    display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px;
+    border-radius: 999px; border: 1px solid rgba(255,255,255,.28);
+    background: rgba(255,255,255,.06); color: #e8e6e1; font-size: 14px; cursor: pointer;
+    letter-spacing: .06em; transition: transform .12s ease, background .15s ease;
+  }
+  #viewerLike .heart { font-size: 17px; line-height: 1; color: #ff6b7a; }
+  #viewerLike[aria-pressed="false"] .heart { color: rgba(255,255,255,.45); }
+  #viewerLike:hover { background: rgba(255,255,255,.12); }
+  #viewerLike:active { transform: scale(.94); }
+  #viewerLike[disabled] { opacity: .5; cursor: default; }
   #viewerClose {
     position: absolute; top: calc(14px + env(safe-area-inset-top)); right: 18px;
     width: 44px; height: 44px; border-radius: 50%; border: 1px solid rgba(255,255,255,.25);
@@ -142,6 +154,52 @@
   .galleryCardMeta { display: flex; justify-content: space-between; gap: 8px; padding: 9px 10px; font-size: 11px; letter-spacing: .08em; }
   .galleryCardType { color: #9fcfff; }
 
+  /* ── 방명록 ─────────────────────────────── */
+  #guestbookPanel {
+    position: fixed; inset: 0; z-index: 56; overflow-y: auto; touch-action: pan-y;
+    color: #e8e6e1; background: #16191e; padding: 0 18px 40px;
+  }
+  #guestbookInner { max-width: 640px; margin: 0 auto; }
+  #guestbookForm {
+    display: flex; flex-direction: column; gap: 12px; padding: 18px 0 10px;
+  }
+  #guestbookForm .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  #guestbookForm input[type="text"], #guestbookForm textarea {
+    width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #3d424b;
+    background: #21252c; color: #ecebe6; font: inherit; font-size: 14px;
+  }
+  #guestbookForm textarea { min-height: 90px; resize: vertical; line-height: 1.6; }
+  #guestbookForm input:focus, #guestbookForm textarea:focus { outline: 2px solid #6ba7d6; border-color: #6ba7d6; }
+  #gbName { flex: 1 1 160px; }
+  #gbSchool { display: flex; gap: 8px; flex-wrap: wrap; }
+  #gbSchool label {
+    padding: 9px 14px; border-radius: 999px; border: 1px solid #555b65;
+    color: #cfccc5; background: #242931; cursor: pointer; font-size: 12.5px; letter-spacing: .04em;
+  }
+  #gbSchool input { position: absolute; opacity: 0; width: 0; height: 0; }
+  #gbSchool label:has(input:checked) { color: #17191d; background: #f0eee9; border-color: #f0eee9; }
+  #gbSubmitRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  #gbCount { font-size: 11.5px; color: #8f8c85; letter-spacing: .05em; }
+  #gbSubmit {
+    padding: 12px 30px; border-radius: 999px; border: none; cursor: pointer;
+    color: #14161a; background: #e8e6e1; font-size: 14px; letter-spacing: .1em;
+  }
+  #gbSubmit:hover { background: #fff; }
+  #gbSubmit[disabled] { opacity: .45; cursor: default; }
+  #gbStatus { font-size: 12.5px; letter-spacing: .05em; color: #9fcf9f; min-height: 18px; padding: 2px 0 6px; }
+  #gbStatus.warn { color: #f0c479; }
+  #gbMode { font-size: 11px; color: #8f8c85; letter-spacing: .04em; padding-bottom: 12px; }
+  #guestbookList { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+  #guestbookList li {
+    border: 1px solid #2f343c; border-radius: 12px; background: #1d2127; padding: 13px 15px;
+  }
+  .gbEntryHead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .gbEntryName { font-size: 14px; font-weight: 600; color: #f0eee9; }
+  .gbEntrySchool { font-size: 11px; color: #9fcfff; letter-spacing: .05em; }
+  .gbEntryTime { font-size: 11px; color: #7d7a73; margin-left: auto; }
+  .gbEntryMsg { font-size: 13.5px; line-height: 1.65; color: #d7d4cd; white-space: pre-wrap; word-break: break-word; }
+  #gbEmpty { color: #8f8c85; font-size: 13px; padding: 24px 0; text-align: center; }
+
   /* ── 모바일 컨트롤 ─────────────────────── */
   #touchUI { position: fixed; inset: 0; z-index: 20; display: none; pointer-events: none; touch-action: none; }
   body.touch.playing #touchUI { display: block; }
@@ -169,7 +227,7 @@
 
   @media (max-width: 520px) {
     #startActions { flex-direction: column; width: min(280px, 90vw); }
-    #enterBtn, #galleryBtn, #autoEnterBtn { width: 100%; }
+    #enterBtn, #galleryBtn, #autoEnterBtn, #guestbookBtn { width: 100%; }
     #galleryGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -196,6 +254,7 @@
     <button id="enterBtn" type="button" disabled>3D 입장 · 入場</button>
     <button id="autoEnterBtn" type="button" disabled>자동 관람 · 自動観覧</button>
     <button id="galleryBtn" type="button" disabled>2D 사진 목록 · 写真リスト</button>
+    <button id="guestbookBtn" type="button">방명록 · ゲストブック</button>
   </div>
   <div id="loadNote" role="status" aria-live="polite">미술관을 준비하는 중… · 美術館を準備しています…</div>
 </main>
@@ -209,13 +268,19 @@
 </nav>
 <div id="hudLeft">
   <button id="autoBtn" type="button" aria-pressed="false" aria-label="자동 관람 켜기·끄기 · 自動観覧のオン・オフ">▶ 자동 · 自動</button>
+  <button id="guestbookHudBtn" type="button" aria-label="방명록 열기 · ゲストブックを開く">✍ 방명록 · 芳名録</button>
   <button id="bgmBtn" type="button" aria-pressed="false" aria-label="배경 음악 켜기·끄기 · BGMのオン・オフ">♪ BGM</button>
 </div>
 
 <div id="viewer" role="dialog" aria-modal="true" aria-labelledby="viewerCap" aria-hidden="true" tabindex="-1">
   <button id="viewerClose" type="button" aria-label="확대 보기 닫기 · 拡大表示を閉じる">✕</button>
   <div id="viewerBody"></div>
-  <div id="viewerCap"></div>
+  <div id="viewerBar">
+    <button id="viewerLike" type="button" aria-pressed="false" aria-label="좋아요 · いいね">
+      <span class="heart" aria-hidden="true">♥</span><span id="viewerLikeCount">0</span>
+    </button>
+    <div id="viewerCap"></div>
+  </div>
 </div>
 
 <section id="galleryPanel" role="dialog" aria-modal="true" aria-labelledby="galleryTitle" aria-hidden="true" hidden>
@@ -225,6 +290,34 @@
   </header>
   <nav id="galleryFilters" aria-label="날짜별 작품 필터 · 日付フィルター"></nav>
   <div id="galleryGrid" role="list"></div>
+</section>
+
+<section id="guestbookPanel" role="dialog" aria-modal="true" aria-labelledby="guestbookTitle" aria-hidden="true" hidden>
+  <div id="guestbookInner">
+    <header class="galleryHeader">
+      <h2 id="guestbookTitle">방명록 · <span lang="ja">芳名録 · ゲストブック</span></h2>
+      <button id="guestbookClose" class="iconButton" type="button" aria-label="방명록 닫기 · ゲストブックを閉じる">✕</button>
+    </header>
+    <form id="guestbookForm" autocomplete="off">
+      <div class="row">
+        <input id="gbName" type="text" maxlength="40" required placeholder="이름 · お名前" aria-label="이름 · お名前">
+      </div>
+      <div id="gbSchool" role="radiogroup" aria-label="소속 · 所属">
+        <label><input type="radio" name="gbSchool" value="요나고미나미 · 米子南">요나고미나미 · 米子南</label>
+        <label><input type="radio" name="gbSchool" value="설악 · 雪岳">설악 · 雪岳</label>
+        <label><input type="radio" name="gbSchool" value="기타 · その他">기타 · その他</label>
+      </div>
+      <textarea id="gbMessage" maxlength="500" required placeholder="방명록을 남겨 주세요 · メッセージを残してください" aria-label="메시지 · メッセージ"></textarea>
+      <div id="gbSubmitRow">
+        <span id="gbCount">0 / 500</span>
+        <button id="gbSubmit" type="submit">남기기 · 記帳する</button>
+      </div>
+    </form>
+    <div id="gbStatus" role="status" aria-live="polite"></div>
+    <div id="gbMode"></div>
+    <ul id="guestbookList" aria-live="polite"></ul>
+    <div id="gbEmpty" hidden>아직 방명록이 없습니다. 첫 글을 남겨 주세요.<br><span lang="ja">まだ記帳がありません。最初のメッセージをどうぞ。</span></div>
+  </div>
 </section>
 
 <div id="touchUI" aria-hidden="true">

@@ -1,6 +1,7 @@
 // 요나고미나미고등학교 설악고등학교 2026 국제교류 — 3D 갤러리
 // Three.js 1인칭 미술관. WASD/SHIFT/SPACE + 모바일 터치 조작.
 import * as THREE from 'three';
+import * as Social from './social.js';
 
 /* ═══════════════════ 상수 ═══════════════════ */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0
@@ -917,6 +918,53 @@ function buildCinema(def, roomGroup) {
   };
 }
 
+/* ═══════════════════ 마스코트 입간판(전신대) ═══════════════════ */
+// 요나고미나미 · 설악 두 학교 마스코트를 실물 크기 컷아웃 입간판으로 세운다.
+// assets/seolibeoli.png: 정사각(투명 배경), 내용은 하단 정렬(발끝이 이미지 밑변),
+// 상단 22%가 여백 → 판 밑변을 바닥에 두면 캐릭터가 바닥에 서 있게 된다.
+function buildStandee(x, z, floor, faceX, faceZ, charHeight = 1.5) {
+  const yBase = floor * FLOOR_HEIGHT;
+  const rotY = Math.atan2(faceX - x, faceZ - z);
+  const group = new THREE.Group();
+  group.position.set(x, yBase, z);
+  group.rotation.y = rotY;
+  scene.add(group);
+
+  const CONTENT_FRAC = 390 / 500;          // 세로 내용 비율(측정값)
+  const planeH = charHeight / CONTENT_FRAC;
+  const planeW = planeH;                    // 정사각 이미지
+  const bottomGap = 0.02;
+
+  const tex = new THREE.TextureLoader().load('assets/seolibeoli.png', (t) => {
+    t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  });
+  const mat = new THREE.MeshStandardMaterial({
+    map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
+    roughness: 0.9, metalness: 0, envMapIntensity: 0.4,
+  });
+  const cutout = new THREE.Mesh(new THREE.PlaneGeometry(planeW, planeH), mat);
+  cutout.position.y = bottomGap + planeH / 2;
+  cutout.renderOrder = 1;
+  group.add(cutout);
+
+  // 받침대(원형)
+  const baseR = Math.max(0.44, charHeight * 0.34);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(baseR, baseR + 0.05, 0.07, 28),
+    new THREE.MeshStandardMaterial({ color: 0x6f5c47, roughness: 0.6, metalness: 0.05 }));
+  base.position.y = 0.035; group.add(base);
+  // 뒤쪽 지지대(이젤 다리)
+  const strut = new THREE.Mesh(new THREE.BoxGeometry(0.07, charHeight * 0.75, 0.045), darkMat);
+  strut.position.set(0, charHeight * 0.38, -0.17);
+  strut.rotation.x = -0.26; group.add(strut);
+  // 바닥 접지 그림자
+  const shadow = new THREE.Mesh(new THREE.PlaneGeometry(planeW * 0.92, baseR * 2.5), shadowMat);
+  shadow.rotation.x = -Math.PI / 2; shadow.position.set(0, 0.006, 0.05);
+  shadow.renderOrder = 2; group.add(shadow);
+
+  addCollider(x, z, baseR * 1.8, baseR * 1.5, floor);
+  return group;
+}
+
 function buildMuseum(manifest) {
   const byDay = [[], [], [], []];
   for (const it of manifest.items) byDay[it.day - 1].push(it);
@@ -1115,6 +1163,9 @@ function buildMuseum(manifest) {
           bp.rotation.y = -Math.PI / 2;
           scene.add(bp);
         });
+
+        // 마스코트 입간판 — 입장하는 관람객을 맞이하도록 로비에 세운다.
+        buildStandee(-3.4, zFrom - 7, def.floor, 1, zFrom - 2.5, 1.5);
       }
 
       floorSpawnPoints[def.floor] = new THREE.Vector3(0, yBase + EYE, zFrom - 3);
@@ -1767,9 +1818,46 @@ const viewerEl = document.getElementById('viewer');
 const viewerBody = document.getElementById('viewerBody');
 const viewerCap = document.getElementById('viewerCap');
 const viewerCloseBtn = document.getElementById('viewerClose');
+const viewerLike = document.getElementById('viewerLike');
+const viewerLikeCount = document.getElementById('viewerLikeCount');
 let viewerOpen = false;
 let controlsBeforeViewer = false;
 let viewerReturnFocus = null;
+
+/* ── 사진/영상 좋아요 ── */
+// 파일 경로(쿼리 제외)를 안정적인 문서 ID로 사용한다.
+function photoIdOf(art) {
+  return String(art.item.file).split('?')[0].replace(/[^a-zA-Z0-9]+/g, '_');
+}
+let likeUnsub = null;
+let likeBusy = false;
+function refreshLikeHeart(id) {
+  viewerLike.setAttribute('aria-pressed', String(Social.hasLiked(id)));
+}
+function bindLike(art) {
+  const id = photoIdOf(art);
+  refreshLikeHeart(id);
+  viewerLikeCount.textContent = '·';
+  if (likeUnsub) likeUnsub();
+  likeUnsub = Social.watchLikes(id, (count) => { viewerLikeCount.textContent = count; });
+  viewerLike.onclick = async () => {
+    if (likeBusy) return;
+    likeBusy = true; viewerLike.disabled = true;
+    const willLike = !Social.hasLiked(id);
+    try {
+      await Social.toggleLike(id);
+      refreshLikeHeart(id);
+      // 낙관적 카운트 갱신 (로컬 모드엔 실시간 콜백이 없고, Firebase는 스냅샷이 곧 확정한다)
+      const cur = parseInt(viewerLikeCount.textContent, 10);
+      if (Number.isFinite(cur)) viewerLikeCount.textContent = String(Math.max(0, cur + (willLike ? 1 : -1)));
+    } catch (err) { console.warn('좋아요 실패', err); }
+    finally { likeBusy = false; viewerLike.disabled = false; }
+  };
+}
+function unbindLike() {
+  if (likeUnsub) { likeUnsub(); likeUnsub = null; }
+  viewerLike.onclick = null;
+}
 
 function openViewer(art, trigger = null) {
   viewerOpen = true;
@@ -1796,12 +1884,14 @@ function openViewer(art, trigger = null) {
     viewerBody.appendChild(im);
   }
   viewerCap.textContent = `${art.dayLabel}  ·  No.${String(art.idxInDay).padStart(3, '0')}`;
+  bindLike(art);
   viewerEl.classList.add('show');
   viewerEl.setAttribute('aria-hidden', 'false');
   viewerCloseBtn.focus();
 }
 function closeViewer() {
   viewerOpen = false;
+  unbindLike();
   const media = viewerBody.querySelector('video');
   if (media) { media.pause(); media.removeAttribute('src'); media.load(); }
   viewerBody.innerHTML = '';
@@ -1913,6 +2003,125 @@ galleryClose.addEventListener('click', closeGallery);
 galleryPanel.addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && !viewerOpen) { e.preventDefault(); closeGallery(); }
 });
+
+/* ═══════════════════ 방명록 ═══════════════════ */
+const guestbookBtn = document.getElementById('guestbookBtn');
+const guestbookHudBtn = document.getElementById('guestbookHudBtn');
+const guestbookPanel = document.getElementById('guestbookPanel');
+const guestbookClose = document.getElementById('guestbookClose');
+const guestbookForm = document.getElementById('guestbookForm');
+const guestbookList = document.getElementById('guestbookList');
+const gbName = document.getElementById('gbName');
+const gbMessage = document.getElementById('gbMessage');
+const gbSubmit = document.getElementById('gbSubmit');
+const gbCount = document.getElementById('gbCount');
+const gbStatus = document.getElementById('gbStatus');
+const gbMode = document.getElementById('gbMode');
+const gbEmpty = document.getElementById('gbEmpty');
+let gbReturnFocus = null, gbFromStart = true, gbControlsBefore = false, gbUnsub = null;
+
+function fmtTime(ms) {
+  const d = new Date(ms); const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}.${p(d.getMonth() + 1)}.${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// 사용자 입력은 textContent로만 넣어 XSS를 원천 차단한다.
+function renderGuestbook(entries) {
+  guestbookList.replaceChildren();
+  gbEmpty.hidden = entries.length > 0;
+  for (const e of entries) {
+    const li = document.createElement('li');
+    const head = document.createElement('div'); head.className = 'gbEntryHead';
+    const name = document.createElement('span'); name.className = 'gbEntryName';
+    name.textContent = e.name || '익명 · 匿名'; head.appendChild(name);
+    if (e.school) {
+      const sc = document.createElement('span'); sc.className = 'gbEntrySchool';
+      sc.textContent = e.school; head.appendChild(sc);
+    }
+    const time = document.createElement('span'); time.className = 'gbEntryTime';
+    time.textContent = fmtTime(e.createdAt); head.appendChild(time);
+    const msg = document.createElement('div'); msg.className = 'gbEntryMsg';
+    msg.textContent = e.message;
+    li.append(head, msg); guestbookList.appendChild(li);
+  }
+}
+
+function openGuestbook() {
+  gbReturnFocus = document.activeElement;
+  gbFromStart = !startEl.classList.contains('hidden');
+  gbControlsBefore = controlsActive;
+  controlsActive = false;
+  if (document.pointerLockElement) document.exitPointerLock();
+  if (gbFromStart) { startEl.setAttribute('aria-hidden', 'true'); startEl.inert = true; }
+  touchUIEl.setAttribute('aria-hidden', 'true');
+  gbMode.textContent = Social.getMode() === 'firebase'
+    ? '모든 관람객과 실시간으로 공유됩니다 · みんなとリアルタイムで共有されます'
+    : '지금은 이 브라우저에만 저장됩니다 (Firebase 미설정) · この端末のみに保存中';
+  guestbookPanel.hidden = false;
+  guestbookPanel.setAttribute('aria-hidden', 'false');
+  if (gbUnsub) gbUnsub();
+  gbUnsub = Social.watchGuestbook(renderGuestbook);
+  guestbookClose.focus();
+}
+
+function closeGuestbook() {
+  if (gbUnsub) { gbUnsub(); gbUnsub = null; }
+  guestbookPanel.hidden = true;
+  guestbookPanel.setAttribute('aria-hidden', 'true');
+  if (gbFromStart) { startEl.setAttribute('aria-hidden', 'false'); startEl.inert = false; }
+  else { controlsActive = gbControlsBefore; if (!IS_TOUCH && controlsActive && !autoTour.active) lockPointer(); }
+  if (gbReturnFocus && typeof gbReturnFocus.focus === 'function') gbReturnFocus.focus();
+  gbReturnFocus = null;
+}
+
+gbMessage.addEventListener('input', () => { gbCount.textContent = `${gbMessage.value.length} / 500`; });
+
+guestbookForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = gbName.value;
+  const school = guestbookForm.querySelector('input[name="gbSchool"]:checked')?.value || '';
+  const message = gbMessage.value;
+  if (!message.trim()) {
+    gbStatus.className = 'warn';
+    gbStatus.textContent = '메시지를 입력해 주세요 · メッセージを入力してください';
+    return;
+  }
+  const wait = Social.postCooldownLeft();
+  if (wait > 0) {
+    gbStatus.className = 'warn';
+    gbStatus.textContent = `잠시 후 다시 시도해 주세요 (${Math.ceil(wait / 1000)}초) · 少し待ってから`;
+    return;
+  }
+  gbSubmit.disabled = true;
+  try {
+    await Social.addGuestbookEntry({ name, school, message });
+    gbMessage.value = ''; gbCount.textContent = '0 / 500';
+    gbStatus.className = '';
+    gbStatus.textContent = '남겨 주셔서 감사합니다 · ありがとうございました';
+    // 로컬 모드는 실시간 스냅샷이 없으므로 목록을 즉시 다시 불러온다.
+    if (Social.getMode() !== 'firebase') {
+      if (gbUnsub) gbUnsub();
+      gbUnsub = Social.watchGuestbook(renderGuestbook);
+    }
+  } catch (err) {
+    gbStatus.className = 'warn';
+    gbStatus.textContent = err.message === 'COOLDOWN'
+      ? '잠시 후 다시 시도해 주세요 · 少し待ってから'
+      : '저장에 실패했습니다 · 保存に失敗しました';
+    console.warn('방명록 저장 실패', err);
+  } finally {
+    gbSubmit.disabled = false;
+  }
+});
+
+guestbookBtn.addEventListener('click', openGuestbook);
+guestbookHudBtn.addEventListener('click', (e) => { e.stopPropagation(); openGuestbook(); });
+guestbookClose.addEventListener('click', closeGuestbook);
+guestbookPanel.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape') { e.preventDefault(); closeGuestbook(); }
+});
+
+Social.initSocial();
 
 /* 레이캐스트로 작품 찾기 */
 const raycaster = new THREE.Raycaster();

@@ -320,8 +320,14 @@ function likeBadgeMaterial(count) {
   if (likeBadgeMaterials.has(label)) return likeBadgeMaterials.get(label);
   const c = document.createElement('canvas'); c.width = 256; c.height = 96;
   const g = c.getContext('2d');
+  const x = 4, y = 4, w = 248, h = 88, r = 44;
   g.beginPath();
-  g.roundRect(4, 4, 248, 88, 44);
+  g.moveTo(x + r, y);
+  g.lineTo(x + w - r, y); g.quadraticCurveTo(x + w, y, x + w, y + r);
+  g.lineTo(x + w, y + h - r); g.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  g.lineTo(x + r, y + h); g.quadraticCurveTo(x, y + h, x, y + h - r);
+  g.lineTo(x, y + r); g.quadraticCurveTo(x, y, x + r, y);
+  g.closePath();
   g.fillStyle = 'rgba(246,244,240,.96)'; g.fill();
   g.strokeStyle = 'rgba(39,40,43,.22)'; g.lineWidth = 3; g.stroke();
   g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -2177,9 +2183,9 @@ async function bindPhotoComments(art) {
   photoCommentSubmit.disabled = true;
   await Social.initSocial();
   if (!viewerOpen || currentCommentPhotoId !== id || seq !== commentOpenSeq) return;
-  photoCommentMode.textContent = Social.getMode() === 'firebase'
+  photoCommentMode.textContent = Social.photoCommentsAreShared()
     ? '이 사진을 연 동안만 최근 코멘트를 불러옵니다 · この写真だけ読み込みます'
-    : '지금은 이 브라우저에만 저장됩니다 · この端末のみに保存中';
+    : '지금은 이 기기에만 저장됩니다 · この端末のみに保存中';
   commentUnsub = Social.watchPhotoComments(id, renderPhotoComments);
   photoCommentSubmit.disabled = false;
 }
@@ -2222,7 +2228,7 @@ photoCommentForm.addEventListener('submit', async (e) => {
     photoCommentCount.textContent = '0 / 300';
     photoCommentStatus.className = '';
     photoCommentStatus.textContent = '코멘트를 남겼습니다 · コメントを投稿しました';
-    if (Social.getMode() !== 'firebase' && currentCommentPhotoId === id) {
+    if (!Social.photoCommentsAreShared() && currentCommentPhotoId === id) {
       if (commentUnsub) commentUnsub();
       commentUnsub = Social.watchPhotoComments(id, renderPhotoComments);
     }

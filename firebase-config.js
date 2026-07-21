@@ -27,3 +27,7 @@ export const firebaseConfig = {
 };
 
 export const FIREBASE_ENABLED = true;
+
+// 사진별 코멘트는 Firestore 규칙을 따로 게시하기 전까지 이 기기에만 저장합니다.
+// FIREBASE_SETUP.md의 규칙을 게시한 뒤 공유하려면 true로 바꾸세요.
+export const FIREBASE_PHOTO_COMMENTS_ENABLED = false;

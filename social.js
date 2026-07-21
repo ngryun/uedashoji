@@ -2,7 +2,11 @@
 //  방명록 · 사진 좋아요 · 사진별 코멘트 데이터 계층
 //  Firebase(Firestore)로 공유 저장. 미설정 시 localStorage 로컬 모드.
 // ═══════════════════════════════════════════════════════════════
-import { firebaseConfig, FIREBASE_ENABLED } from './firebase-config.js';
+import {
+  firebaseConfig,
+  FIREBASE_ENABLED,
+  FIREBASE_PHOTO_COMMENTS_ENABLED,
+} from './firebase-config.js';
 
 const FB_VERSION = '10.12.5';
 const FB_INIT_TIMEOUT_MS = 8000;
@@ -17,6 +21,9 @@ let fb = null;        // Firestore 모듈 + db
 let initPromise = null;
 
 export function getMode() { return mode; }
+export function photoCommentsAreShared() {
+  return mode === 'firebase' && FIREBASE_PHOTO_COMMENTS_ENABLED;
+}
 
 export function initSocial() {
   if (initPromise) return initPromise;
@@ -126,7 +133,7 @@ function localCommentsFor(photoId) {
 
 // 선택한 사진의 최근 코멘트만 구독한다. 다른 사진의 코멘트는 읽지 않는다.
 export function watchPhotoComments(photoId, cb) {
-  if (mode === 'firebase') {
+  if (photoCommentsAreShared()) {
     const entries = fb.collection(fb.db, 'photoComments', photoId, 'entries');
     const q = fb.query(entries, fb.orderBy('createdAt', 'desc'), fb.limit(COMMENT_LIMIT));
     return fb.onSnapshot(q,
@@ -159,7 +166,7 @@ export async function addPhotoComment({ photoId, name, school, message }) {
   if (!id || !clean.message) throw new Error('EMPTY_MESSAGE');
   if (postCooldownLeft() > 0) throw new Error('COOLDOWN');
 
-  if (mode === 'firebase') {
+  if (photoCommentsAreShared()) {
     await fb.addDoc(fb.collection(fb.db, 'photoComments', id, 'entries'), {
       ...clean,
       createdAt: fb.serverTimestamp(),

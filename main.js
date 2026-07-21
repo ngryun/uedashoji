@@ -310,6 +310,44 @@ const frameGeo = new THREE.BoxGeometry(1, 1, 1);
 const frameMat = new THREE.MeshStandardMaterial({ color: 0x17171a, roughness: 0.35, metalness: 0.2, envMapIntensity: 0.9 });
 const shadowGeo = new THREE.PlaneGeometry(1, 1);
 const artworkPlaneGeo = new THREE.PlaneGeometry(1, 1);
+const likeBadgeGeo = new THREE.PlaneGeometry(1, 1);
+const likeBadgeMaterials = new Map();
+
+// 3D 작품 아래에 붙는 작은 미술관 라벨형 하트 배지. 같은 숫자는 텍스처를
+// 공유해서 작품 수만큼 캔버스/텍스처를 만들지 않는다.
+function likeBadgeMaterial(count) {
+  const label = count > 999 ? '999+' : String(Math.max(0, count | 0));
+  if (likeBadgeMaterials.has(label)) return likeBadgeMaterials.get(label);
+  const c = document.createElement('canvas'); c.width = 256; c.height = 96;
+  const g = c.getContext('2d');
+  g.beginPath();
+  g.roundRect(4, 4, 248, 88, 44);
+  g.fillStyle = 'rgba(246,244,240,.96)'; g.fill();
+  g.strokeStyle = 'rgba(39,40,43,.22)'; g.lineWidth = 3; g.stroke();
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = '#e65e6d'; g.font = '700 48px "Helvetica Neue",sans-serif';
+  g.fillText('♥', 72, 51);
+  g.fillStyle = '#343438'; g.font = '600 39px "Helvetica Neue",sans-serif';
+  g.fillText(label, 166, 50);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex, transparent: true, depthWrite: false, toneMapped: false,
+  });
+  likeBadgeMaterials.set(label, mat);
+  return mat;
+}
+
+function layoutLikeBadge(art) {
+  if (!art.likeBadge) return;
+  art.likeBadge.position.set(art.w / 2 - 0.20, -art.h / 2 - (art.isVideo ? 0.16 : 0.12), 0.11);
+}
+
+function setArtworkLikeCount(art, count, visible = true) {
+  const value = Math.max(0, count | 0);
+  art.likeCount = value;
+  art.likeBadge.material = likeBadgeMaterial(value);
+  art.likeBadge.visible = visible;
+}
 // 스크린 둘레의 사각 빛 번짐 — 프로젝터 빛이 벽면에 번진 느낌 (타원 글로우는 조명 얼룩처럼 보였음)
 const projSpillTex = (() => {
   const c = document.createElement('canvas'); c.width = c.height = 256;
@@ -369,6 +407,7 @@ function fitArtworkToAspect(art, aspect) {
   if (art.projectionGlow) art.projectionGlow.scale.set(pw + 0.7, ph + 0.7, 1);
   if (art.beamGeo) updateBeamGeometry(art);
   if (art.caption) art.caption.position.y = -ph / 2 - 0.2;
+  layoutLikeBadge(art);
 
   // 사진 텍스처에는 매트가 합성되어 있고, 영상은 원본 화면 비율만 사용한다.
   art.plane.scale.set(art.isVideo ? pw : w, art.isVideo ? ph : h, 1);
@@ -442,9 +481,15 @@ function createArtwork(item, roomIdx, idxInDay, dayLabel) {
   }
   group.add(plane);
 
-  const art = { item, group, plane, frame, shadow, projectionGlow, beam, beamGeo, caption,
+  const likeBadge = new THREE.Mesh(likeBadgeGeo, likeBadgeMaterial(0));
+  likeBadge.scale.set(0.50, 0.19, 1);
+  likeBadge.renderOrder = 6;
+  likeBadge.visible = false;
+  group.add(likeBadge);
+
+  const art = { item, group, plane, frame, shadow, projectionGlow, beam, beamGeo, caption, likeBadge,
                 border, maxDim, matPad: mat, isVideo, roomIdx, idxInDay, dayLabel,
-                loaded: false, loading: false, tex: null, video: null, vtex: null, pos: new THREE.Vector3() };
+                likeCount: 0, loaded: false, loading: false, tex: null, video: null, vtex: null, pos: new THREE.Vector3() };
   fitArtworkToAspect(art, aspect);
   plane.userData.art = art;
   if (frame) frame.userData.art = art;
@@ -2004,6 +2049,16 @@ const viewerCap = document.getElementById('viewerCap');
 const viewerCloseBtn = document.getElementById('viewerClose');
 const viewerLike = document.getElementById('viewerLike');
 const viewerLikeCount = document.getElementById('viewerLikeCount');
+const photoCommentForm = document.getElementById('photoCommentForm');
+const photoCommentName = document.getElementById('photoCommentName');
+const photoCommentSchool = document.getElementById('photoCommentSchool');
+const photoCommentMessage = document.getElementById('photoCommentMessage');
+const photoCommentCount = document.getElementById('photoCommentCount');
+const photoCommentSubmit = document.getElementById('photoCommentSubmit');
+const photoCommentStatus = document.getElementById('photoCommentStatus');
+const photoCommentMode = document.getElementById('photoCommentMode');
+const photoCommentList = document.getElementById('photoCommentList');
+const photoCommentEmpty = document.getElementById('photoCommentEmpty');
 let viewerOpen = false;
 let controlsBeforeViewer = false;
 let viewerReturnFocus = null;
@@ -2012,6 +2067,32 @@ let viewerReturnFocus = null;
 // 파일 경로(쿼리 제외)를 안정적인 문서 ID로 사용한다.
 function photoIdOf(art) {
   return String(art.item.file).split('?')[0].replace(/[^a-zA-Z0-9]+/g, '_');
+}
+const likeCountById = Object.create(null);
+const likeCountRequestedIds = new Set();
+
+function updateLikeCountEverywhere(id, count) {
+  const value = Math.max(0, count | 0);
+  likeCountById[id] = value;
+  likeCountRequestedIds.add(id);
+  for (const art of artworks) {
+    if (photoIdOf(art) === id) setArtworkLikeCount(art, value, true);
+  }
+}
+
+function load3DLikeCountsFor(arts) {
+  const ids = [...new Set(arts.map(photoIdOf).filter((id) => !likeCountRequestedIds.has(id)))];
+  if (!ids.length) return;
+  ids.forEach((id) => likeCountRequestedIds.add(id));
+  Social.initSocial()
+    .then(() => Social.getLikeCounts(ids))
+    .then((counts) => {
+      Object.assign(likeCountById, counts);
+      for (const art of arts) setArtworkLikeCount(art, counts[photoIdOf(art)] | 0, true);
+    })
+    .catch((err) => {
+      console.warn('3D 좋아요 수 불러오기 실패', err);
+    });
 }
 let likeUnsub = null;
 let likeBusy = false;
@@ -2035,7 +2116,11 @@ function bindLike(art) {
       refreshLikeHeart(id);
       // 낙관적 카운트 갱신 (로컬 모드엔 실시간 콜백이 없고, Firebase는 스냅샷이 곧 확정한다)
       const cur = parseInt(viewerLikeCount.textContent, 10);
-      if (Number.isFinite(cur)) viewerLikeCount.textContent = String(Math.max(0, cur + (willLike ? 1 : -1)));
+      if (Number.isFinite(cur)) {
+        const next = Math.max(0, cur + (willLike ? 1 : -1));
+        viewerLikeCount.textContent = String(next);
+        updateLikeCountEverywhere(id, next);
+      }
     } catch (err) { console.warn('좋아요 실패', err); }
     finally { likeBusy = false; viewerLike.disabled = false; }
   };
@@ -2043,6 +2128,7 @@ function bindLike(art) {
   Social.initSocial().then(() => {
     if (!viewerOpen || currentLikeId !== id) return;   // 그 사이 뷰어가 닫히거나 바뀜
     likeUnsub = Social.watchLikes(id, (count) => {
+      updateLikeCountEverywhere(id, count);
       if (currentLikeId === id) viewerLikeCount.textContent = count;
     });
   });
@@ -2052,6 +2138,104 @@ function unbindLike() {
   if (likeUnsub) { likeUnsub(); likeUnsub = null; }
   viewerLike.onclick = null;
 }
+
+/* ── 사진/영상별 코멘트 ── */
+let commentUnsub = null;
+let currentCommentPhotoId = null;
+let commentOpenSeq = 0;
+
+function renderPhotoComments(entries) {
+  photoCommentList.replaceChildren();
+  photoCommentEmpty.hidden = entries.length > 0;
+  for (const entry of entries) {
+    const li = document.createElement('li');
+    const head = document.createElement('div'); head.className = 'photoCommentHead';
+    const name = document.createElement('span'); name.className = 'photoCommentName';
+    name.textContent = entry.name || '익명 · 匿名'; head.appendChild(name);
+    if (entry.school) {
+      const school = document.createElement('span'); school.className = 'photoCommentSchool';
+      school.textContent = entry.school; head.appendChild(school);
+    }
+    const time = document.createElement('span'); time.className = 'photoCommentTime';
+    time.textContent = fmtTime(entry.createdAt); head.appendChild(time);
+    const message = document.createElement('div'); message.className = 'photoCommentMessage';
+    message.textContent = entry.message;
+    li.append(head, message); photoCommentList.appendChild(li);
+  }
+}
+
+async function bindPhotoComments(art) {
+  const id = photoIdOf(art);
+  const seq = ++commentOpenSeq;
+  currentCommentPhotoId = id;
+  if (commentUnsub) { commentUnsub(); commentUnsub = null; }
+  photoCommentList.replaceChildren();
+  photoCommentEmpty.hidden = true;
+  photoCommentStatus.className = '';
+  photoCommentStatus.textContent = '';
+  photoCommentMode.textContent = '연결하는 중… · 接続中…';
+  photoCommentSubmit.disabled = true;
+  await Social.initSocial();
+  if (!viewerOpen || currentCommentPhotoId !== id || seq !== commentOpenSeq) return;
+  photoCommentMode.textContent = Social.getMode() === 'firebase'
+    ? '이 사진을 연 동안만 최근 코멘트를 불러옵니다 · この写真だけ読み込みます'
+    : '지금은 이 브라우저에만 저장됩니다 · この端末のみに保存中';
+  commentUnsub = Social.watchPhotoComments(id, renderPhotoComments);
+  photoCommentSubmit.disabled = false;
+}
+
+function unbindPhotoComments() {
+  commentOpenSeq++;
+  currentCommentPhotoId = null;
+  if (commentUnsub) { commentUnsub(); commentUnsub = null; }
+  photoCommentSubmit.disabled = true;
+}
+
+photoCommentMessage.addEventListener('input', () => {
+  photoCommentCount.textContent = `${photoCommentMessage.value.length} / 300`;
+});
+
+photoCommentForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = currentCommentPhotoId;
+  if (!id || !photoCommentMessage.value.trim()) {
+    photoCommentStatus.className = 'warn';
+    photoCommentStatus.textContent = '코멘트를 입력해 주세요 · コメントを入力してください';
+    return;
+  }
+  const wait = Social.postCooldownLeft();
+  if (wait > 0) {
+    photoCommentStatus.className = 'warn';
+    photoCommentStatus.textContent = `잠시 후 다시 시도해 주세요 (${Math.ceil(wait / 1000)}초) · 少し待ってから`;
+    return;
+  }
+  photoCommentSubmit.disabled = true;
+  try {
+    await Social.initSocial();
+    await Social.addPhotoComment({
+      photoId: id,
+      name: photoCommentName.value,
+      school: photoCommentSchool.value,
+      message: photoCommentMessage.value,
+    });
+    photoCommentMessage.value = '';
+    photoCommentCount.textContent = '0 / 300';
+    photoCommentStatus.className = '';
+    photoCommentStatus.textContent = '코멘트를 남겼습니다 · コメントを投稿しました';
+    if (Social.getMode() !== 'firebase' && currentCommentPhotoId === id) {
+      if (commentUnsub) commentUnsub();
+      commentUnsub = Social.watchPhotoComments(id, renderPhotoComments);
+    }
+  } catch (err) {
+    photoCommentStatus.className = 'warn';
+    photoCommentStatus.textContent = err.message === 'COOLDOWN'
+      ? '잠시 후 다시 시도해 주세요 · 少し待ってから'
+      : '저장에 실패했습니다 · 保存に失敗しました';
+    console.warn('사진 코멘트 저장 실패', err);
+  } finally {
+    if (currentCommentPhotoId === id) photoCommentSubmit.disabled = false;
+  }
+});
 
 function openViewer(art, trigger = null) {
   viewerOpen = true;
@@ -2081,11 +2265,13 @@ function openViewer(art, trigger = null) {
   bindLike(art);
   viewerEl.classList.add('show');
   viewerEl.setAttribute('aria-hidden', 'false');
+  bindPhotoComments(art);
   viewerCloseBtn.focus();
 }
 function closeViewer() {
   viewerOpen = false;
   unbindLike();
+  unbindPhotoComments();
   const media = viewerBody.querySelector('video');
   if (media) { media.pause(); media.removeAttribute('src'); media.load(); }
   viewerBody.innerHTML = '';
@@ -2106,7 +2292,8 @@ viewerEl.addEventListener('click', (e) => { if (e.target === viewerEl) closeView
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && viewerOpen) { e.preventDefault(); closeViewer(); return; }
   if (e.code !== 'Tab' || !viewerOpen) return;
-  const focusable = [...viewerEl.querySelectorAll('button, video[controls]')];
+  const focusable = [...viewerEl.querySelectorAll('button, input, select, textarea, video[controls]')]
+    .filter((el) => !el.disabled);
   if (!focusable.length) return;
   const index = focusable.indexOf(document.activeElement);
   const next = e.shiftKey
@@ -2571,6 +2758,12 @@ function updateRooms(now) {
       && art.distanceFromPlayer <= ART_LOAD_DISTANCE)
     .sort((a, b) => a.distanceFromPlayer - b.distanceFromPlayer)
     .slice(0, MAX_LOADED_PHOTOS));
+
+  if (document.body.classList.contains('playing')) {
+    load3DLikeCountsFor(artworks.filter((art) => art.floor === player.floor
+      && Math.abs(art.roomIdx - currentRoomIdx) <= 1
+      && art.distanceFromPlayer <= ART_VISIBLE_DISTANCE));
+  }
 
   for (const art of artworks) {
     const nearRoom = art.floor === player.floor && Math.abs(art.roomIdx - currentRoomIdx) <= 1;

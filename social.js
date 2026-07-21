@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  방명록 · 사진 좋아요 데이터 계층
+//  방명록 · 사진 좋아요 · 사진별 코멘트 데이터 계층
 //  Firebase(Firestore)로 공유 저장. 미설정 시 localStorage 로컬 모드.
 // ═══════════════════════════════════════════════════════════════
 import { firebaseConfig, FIREBASE_ENABLED } from './firebase-config.js';
@@ -9,6 +9,7 @@ const FB_INIT_TIMEOUT_MS = 8000;
 const LS_LIKED = 'guest.liked.v1';        // 이 브라우저가 누른 좋아요 {id:1}
 const LS_LIKECOUNT = 'guest.likeCount.v1'; // 로컬 모드 좋아요 수 {id:n}
 const LS_GUEST = 'guest.guestbook.v1';     // 로컬 모드 방명록 [entry]
+const LS_COMMENTS = 'guest.photoComments.v1'; // 로컬 모드 사진별 코멘트 {photoId:[entry]}
 const LS_LASTPOST = 'guest.lastPost.v1';   // 도배 방지용 마지막 작성 시각
 
 let mode = 'local';   // 'firebase' | 'local'
@@ -76,6 +77,25 @@ export function watchLikes(id, cb) {
   return () => {};
 }
 
+// 3D 전시장 배지용 좋아요 스냅샷. 가까운 방의 사진 ID만 최대 30개씩
+// 묶어 조회해 작품마다 개별 요청하거나 전 작품을 한꺼번에 읽지 않는다.
+export async function getLikeCounts(ids) {
+  const wanted = [...new Set(ids.map(String).filter(Boolean))];
+  if (mode === 'firebase') {
+    const counts = {};
+    for (let i = 0; i < wanted.length; i += 30) {
+      const chunk = wanted.slice(i, i + 30);
+      const q = fb.query(fb.collection(fb.db, 'likes'),
+        fb.where(fb.documentId(), 'in', chunk));
+      const snap = await fb.getDocs(q);
+      snap.forEach((doc) => { counts[doc.id] = Math.max(0, (doc.data()?.count) | 0); });
+    }
+    return counts;
+  }
+  const local = readJSON(LS_LIKECOUNT, {});
+  return Object.fromEntries(wanted.map((id) => [id, local[id] | 0]));
+}
+
 // 좋아요 토글. 새 상태(liked) 반환.
 export async function toggleLike(id) {
   const liked = !hasLiked(id);
@@ -94,6 +114,65 @@ export async function toggleLike(id) {
     writeJSON(LS_LIKECOUNT, c);
   }
   return liked;
+}
+
+/* ═══════════════════ 사진별 코멘트 ═══════════════════ */
+const COMMENT_NAME_MAX = 40, COMMENT_MSG_MAX = 300, COMMENT_LIMIT = 40;
+
+function localCommentsFor(photoId) {
+  const all = readJSON(LS_COMMENTS, {});
+  return Array.isArray(all[photoId]) ? all[photoId] : [];
+}
+
+// 선택한 사진의 최근 코멘트만 구독한다. 다른 사진의 코멘트는 읽지 않는다.
+export function watchPhotoComments(photoId, cb) {
+  if (mode === 'firebase') {
+    const entries = fb.collection(fb.db, 'photoComments', photoId, 'entries');
+    const q = fb.query(entries, fb.orderBy('createdAt', 'desc'), fb.limit(COMMENT_LIMIT));
+    return fb.onSnapshot(q,
+      (snap) => cb(snap.docs.map((d) => {
+        const v = d.data();
+        return {
+          id: d.id,
+          name: v.name,
+          school: v.school,
+          message: v.message,
+          createdAt: v.createdAt?.toMillis ? v.createdAt.toMillis() : Date.now(),
+        };
+      })),
+      (err) => {
+        console.warn('[social] 사진 코멘트 구독 오류', err);
+        cb(localCommentsFor(photoId));
+      });
+  }
+  cb(localCommentsFor(photoId));
+  return () => {};
+}
+
+export async function addPhotoComment({ photoId, name, school, message }) {
+  const id = String(photoId || '').trim();
+  const clean = {
+    name: String(name || '').trim().slice(0, COMMENT_NAME_MAX) || '익명 · 匿名',
+    school: String(school || '').trim().slice(0, 40),
+    message: String(message || '').trim().slice(0, COMMENT_MSG_MAX),
+  };
+  if (!id || !clean.message) throw new Error('EMPTY_MESSAGE');
+  if (postCooldownLeft() > 0) throw new Error('COOLDOWN');
+
+  if (mode === 'firebase') {
+    await fb.addDoc(fb.collection(fb.db, 'photoComments', id, 'entries'), {
+      ...clean,
+      createdAt: fb.serverTimestamp(),
+    });
+  } else {
+    const all = readJSON(LS_COMMENTS, {});
+    const list = localCommentsFor(id);
+    list.unshift({ id: 'local-' + Date.now(), ...clean, createdAt: Date.now() });
+    all[id] = list.slice(0, COMMENT_LIMIT);
+    writeJSON(LS_COMMENTS, all);
+  }
+  localStorage.setItem(LS_LASTPOST, String(Date.now()));
+  return clean;
 }
 
 /* ═══════════════════ 방명록 ═══════════════════ */

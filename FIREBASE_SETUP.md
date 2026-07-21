@@ -55,9 +55,11 @@ service cloud.firestore {
     }
 
     // 방명록: 누구나 읽기/작성, 수정·삭제는 콘솔(관리자)에서만
+    // badge 는 선택 필드 — "기네스북"(비밀의 방 도전 성공자) 표시용. 값은 'secret' 만 허용.
     match /guestbook/{id} {
       allow read: if true;
-      allow create: if request.resource.data.keys().hasOnly(['name','school','message','createdAt'])
+      allow create: if request.resource.data.keys().hasOnly(['name','school','message','createdAt','badge'])
+                    && request.resource.data.keys().hasAll(['name','school','message','createdAt'])
                     && request.resource.data.name is string
                     && request.resource.data.name.size() <= 40
                     && request.resource.data.school is string
@@ -65,7 +67,9 @@ service cloud.firestore {
                     && request.resource.data.message is string
                     && request.resource.data.message.size() >= 1
                     && request.resource.data.message.size() <= 500
-                    && request.resource.data.createdAt == request.time;
+                    && request.resource.data.createdAt == request.time
+                    && (!('badge' in request.resource.data)
+                        || request.resource.data.badge == 'secret');
       allow update, delete: if false;
     }
   }

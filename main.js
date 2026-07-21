@@ -2,6 +2,7 @@
 // Three.js 1인칭 미술관. WASD/SHIFT/SPACE + 모바일 터치 조작.
 import * as THREE from 'three';
 import * as Social from './social.js';
+import { SECRET_QUIZ, REWARD_VIDEO } from './quiz-data.js';
 
 /* ═══════════════════ 상수 ═══════════════════ */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0
@@ -33,6 +34,28 @@ const MAX_LOADED_PHOTOS = IS_TOUCH ? 36 : 56;
 const AUTO_SPEED = 1.1;       // 자동 관람 이동 속도 (m/s) — 아주 천천히
 const AUTO_DWELL_PHOTO = 4;   // 사진 앞 감상 시간 (s)
 const AUTO_DWELL_VIDEO = 9;   // 영상 앞 감상 시간 (s)
+
+/* ═══════════════════ 비밀의 방 챌린지 (9와 3/4 승강장) ═══════════════════ */
+// 2F 시네마 뒤쪽 표지 → 퀴즈 → 레이저 타이밍 점프맵 → 비밀의 방(보상 영상 + 기네스북).
+const PORTAL_W = 3.0, PORTAL_H = 3.4;   // 시네마 동쪽 벽 표지(포털) 개구부 크기
+const LAND_TOL = 0.28;                  // 발판 착지 허용 오차 (위에서만 착지)
+const platforms = [];   // {minX,maxX,minZ,maxZ, topY} — 위에서만 착지하는 관대한 발판
+const lasers = [];      // {x, zMin, zMax, onS, offS, phaseS, mesh, mat}
+const challenge = {
+  active: false,   // 퀴즈 통과 후 점프맵 활성
+  solved: false,   // 퀴즈 통과 여부
+  reached: false,  // 비밀의 방 도달 여부
+  armed: true,     // 표지 접근 시 퀴즈 재오픈 가능 여부(존을 벗어나면 재장전)
+  clock: 0,        // 레이저 타이밍용 누적 시간(s)
+  pitY: 0,         // 낙사 판정 바닥(월드 Y)
+  checkpoint: new THREE.Vector3(),
+  checkpointYaw: -Math.PI / 2,   // +x(동쪽)를 바라봄
+  bounds: null,        // {wallX, endX, zS, zN} 점프맵 영역
+  roomTrigger: null,   // {minX,maxX,minZ,maxZ} 도달 판정 박스
+};
+let secretPortalColliders = [];  // 정답 시 통과 가능하도록 제거할 콜라이더
+let secretPortalMesh = null;     // 표지(벽돌 포털) 메시 — 정답 시 열림 연출
+let hofGroup = null, hofUnsub = null;   // 명예의 전당(3D 이름 벽)
 
 // 한국어 요일 → 일본어 병기 ("(일)" → "(일·日)")
 const WEEKDAY_JA = { '일': '日', '월': '月', '화': '火', '수': '水', '목': '木', '금': '金', '토': '土' };
@@ -678,13 +701,26 @@ function buildCinema(def, roomGroup) {
 
   const wallMat = new THREE.MeshStandardMaterial({
     color: 0x191a1e, roughness: 0.92, metalness: 0.0, envMapIntensity: 0.25 });
-  // 좌우 외벽 (어두움) — 스크린은 서쪽 벽
-  wallBox(-W / 2 - T / 2, yBase + WALL_H / 2, cz, T, WALL_H, L + 0.2, wallMat, true, def.floor);
+  // 서쪽(스크린) 벽 — 스크린 뒤로 "비밀의 방" 포털 개구부를 남긴다.
+  const gLo = cz - PORTAL_W / 2, gHi = cz + PORTAL_W / 2;
+  const zLo = cz - (L + 0.2) / 2, zHi = cz + (L + 0.2) / 2;
+  wallBox(-W / 2 - T / 2, yBase + WALL_H / 2, (zLo + gLo) / 2, T, WALL_H, gLo - zLo, wallMat, true, def.floor);
+  wallBox(-W / 2 - T / 2, yBase + WALL_H / 2, (gHi + zHi) / 2, T, WALL_H, zHi - gHi, wallMat, true, def.floor);
+  wallBox(-W / 2 - T / 2, yBase + (PORTAL_H + WALL_H) / 2, cz, T, WALL_H - PORTAL_H, PORTAL_W, wallMat, false, def.floor);
+  // 동쪽 벽 (솔리드)
   wallBox(W / 2 + T / 2, yBase + WALL_H / 2, cz, T, WALL_H, L + 0.2, wallMat, true, def.floor);
   const innerMat = new THREE.MeshStandardMaterial({ color: 0x0e0f12, roughness: 0.95 });
-  const westInner = new THREE.Mesh(new THREE.PlaneGeometry(L, WALL_H), innerMat);
-  westInner.position.set(-W / 2 + 0.02, yBase + WALL_H / 2, cz); westInner.rotation.y = Math.PI / 2;
-  scene.add(westInner);
+  const westSeg = (segCz, segLen) => {
+    if (segLen <= 0.02) return;
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(segLen, WALL_H), innerMat);
+    p.position.set(-W / 2 + 0.02, yBase + WALL_H / 2, segCz); p.rotation.y = Math.PI / 2;
+    scene.add(p);
+  };
+  westSeg((cz - L / 2 + gLo) / 2, gLo - (cz - L / 2));
+  westSeg((gHi + cz + L / 2) / 2, (cz + L / 2) - gHi);
+  const westLintel = new THREE.Mesh(new THREE.PlaneGeometry(PORTAL_W, WALL_H - PORTAL_H), innerMat);
+  westLintel.position.set(-W / 2 + 0.02, yBase + (PORTAL_H + WALL_H) / 2, cz); westLintel.rotation.y = Math.PI / 2;
+  scene.add(westLintel);
   const eastInner = new THREE.Mesh(new THREE.PlaneGeometry(L, WALL_H), innerMat);
   eastInner.position.set(W / 2 - 0.02, yBase + WALL_H / 2, cz); eastInner.rotation.y = -Math.PI / 2;
   scene.add(eastInner);
@@ -717,6 +753,18 @@ function buildCinema(def, roomGroup) {
   spill.position.set(screenX + 0.01, screenY, cz); spill.rotation.y = Math.PI / 2;
   spill.renderOrder = 1;
   scene.add(spill);
+
+  // "9와 3/4 승강장" 표시 — 스크린 맨 아래에 걸쳐 입구 개구부(빈틈)를 덮는다. 비밀의 방 단서.
+  // 영상과는 아주 살짝(≈0.03m)만 겹치고, 나머지는 스크린 하단~바닥의 빈틈을 가린다.
+  const platLabel = textPlane([
+    { text: 'PLATFORM 9¾', size: 0.2, weight: 700, spacing: 0.14, color: '#f2d675' },
+    { text: '9와 3/4 승강장 · 9と3/4番線', size: 0.1, color: '#e8e6e1' },
+  ], screenW, 1.05, { bg: '#0a0a0c' });
+  platLabel.position.set(screenX + 0.05, screenY - screenH / 2 - 0.5, cz);
+  platLabel.rotation.y = Math.PI / 2;
+  platLabel.renderOrder = 3;
+  scene.add(platLabel);
+  challenge.signMesh = platLabel;
 
   // 상영실 안내판
   const sign = textPlane([
@@ -916,6 +964,108 @@ function buildCinema(def, roomGroup) {
       }
     },
   };
+}
+
+/* ═══════════════════ 비밀의 방 챌린지 빌드 (9와 3/4 승강장) ═══════════════════ */
+// 시네마 동쪽 벽 포털(표지) → 어두운 통로 안의 레이저 타이밍 점프맵 → 비밀의 방.
+function buildSecretEntrance(def) {
+  const yBase = def.elevation;
+  const cz = (def.zFrom + def.zTo) / 2;
+  const wallX = -(def.W / 2 + T / 2);        // 시네마 서쪽(스크린) 벽면 x
+  const zS = cz - 3.0, zN = cz + 3.0;        // 통로 z 경계
+  const endX = -32.5;                         // 통로 서쪽 끝
+  const topY = yBase;                         // 발판/도착 기준 높이
+  const pitY = yBase - 4.0;                   // 낙사 바닥
+  const ceilY = yBase + WALL_H;
+
+  challenge.bounds = { wallX, endX, zS, zN, cz };
+  challenge.pitY = pitY;
+  challenge.checkpoint.set(wallX - 1.4, EYE + topY, cz);   // 스크린 통과 직후(서쪽)
+  challenge.checkpointYaw = Math.PI / 2;     // -x(서쪽)를 향함
+  challenge.roomTrigger = { minX: endX, maxX: -29.2, minZ: zS, maxZ: zN };
+
+  const darkMatL = new THREE.MeshStandardMaterial({ color: 0x14151a, roughness: 0.96, metalness: 0.02, envMapIntensity: 0.2 });
+  const platMat = new THREE.MeshStandardMaterial({ color: 0x9c978c, roughness: 0.72, metalness: 0.03,
+    emissive: 0x14110c, emissiveIntensity: 0.12, envMapIntensity: 0.3 });
+
+  // 포털(스크린) 콜라이더 — 정답 전에는 막혀 있다. 스크린 자체가 표지 역할.
+  addCollider(wallX + 0.06, cz, 0.24, PORTAL_W, def.floor);
+  secretPortalColliders.push(colliders[colliders.length - 1]);
+  secretPortalMesh = null;   // 벽돌 없이 스크린이 곧 포털 (표지는 화면 하단 라벨)
+
+  /* ── 어두운 통로 외곽(벽·천장·구덩이 바닥) — 스크린 뒤 서쪽으로 뻗는다 ── */
+  const midX = (wallX + endX) / 2, corrLen = Math.abs(endX - wallX), corrW = zN - zS;
+  wallBox(midX, yBase + WALL_H / 2, zS, corrLen, WALL_H, T, darkMatL, true, def.floor);   // 남쪽 벽
+  wallBox(midX, yBase + WALL_H / 2, zN, corrLen, WALL_H, T, darkMatL, true, def.floor);   // 북쪽 벽
+  wallBox(endX, yBase + WALL_H / 2, cz, T, WALL_H, corrW + T, darkMatL, true, def.floor); // 서쪽 끝 벽
+  const ceil = new THREE.Mesh(new THREE.PlaneGeometry(corrLen, corrW), new THREE.MeshBasicMaterial({ color: 0x0c0d10, side: THREE.BackSide }));
+  ceil.rotation.x = -Math.PI / 2; ceil.position.set(midX, ceilY - 0.02, cz); scene.add(ceil);
+  const pit = new THREE.Mesh(new THREE.BoxGeometry(corrLen, 0.4, corrW), darkMatL);
+  pit.position.set(midX, pitY - 0.2, cz); scene.add(pit);
+
+  /* ── 발판 (서쪽으로 계단식) ── */
+  const addPlatform = (minX, maxX, minZ, maxZ) => {
+    platforms.push({ minX, maxX, minZ, maxZ, topY });
+    const thick = 0.32;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(maxX - minX, thick, maxZ - minZ), platMat);
+    m.position.set((minX + maxX) / 2, topY - thick / 2, (minZ + maxZ) / 2);
+    scene.add(m);
+  };
+  addPlatform(-12.0, wallX, zS + 0.1, zN - 0.1);   // 시작 발판(스크린 벽 뒤 — 극장 바닥으로 튀어나오지 않게)
+  const pZ0 = cz - 1.3, pZ1 = cz + 1.3;
+  addPlatform(-16.5, -14.3, pZ0, pZ1);
+  addPlatform(-20.7, -18.5, pZ0, pZ1);
+  addPlatform(-24.9, -22.7, pZ0, pZ1);
+  addPlatform(-29.1, -26.9, pZ0, pZ1);
+  addPlatform(endX + 0.2, -29.0, zS + 0.1, zN - 0.1);    // 도착(비밀의 방) 바닥
+
+  /* ── 레이저 빔 — 위아래로 부드럽게 움직인다. 높을 때 지나가거나 낮을 때 뛰어넘는다 ── */
+  const addLaser = (x, phase, speed) => {
+    const bar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.14, 0.14, corrW - 0.1),
+      new THREE.MeshBasicMaterial({ color: 0xff2f3d, toneMapped: false }));
+    bar.position.set(x, topY + 1.9, cz); bar.renderOrder = 4;
+    scene.add(bar);
+    // 빔 주변 부드러운 붉은 광 번짐
+    const glow = new THREE.Mesh(
+      new THREE.PlaneGeometry(corrW - 0.1, 0.7),
+      new THREE.MeshBasicMaterial({ color: 0xff2f3d, transparent: true, opacity: 0.28,
+        toneMapped: false, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
+    glow.rotation.y = Math.PI / 2; glow.position.copy(bar.position); glow.renderOrder = 3;
+    scene.add(glow);
+    lasers.push({ x, zMin: zS, zMax: zN, baseY: topY, phase, speed, bar, glow });
+  };
+  [-13.15, -17.5, -21.7, -25.9].forEach((x, i) => addLaser(x, i * 1.15, 1.25 + i * 0.12));
+
+  /* ── 비밀의 방: 명예의 전당(3D 이름 벽) ── */
+  hofGroup = new THREE.Group();
+  hofGroup.position.set(endX + T / 2 + 0.12, yBase, cz);   // 서쪽 끝 벽면 앞(가려지지 않게)
+  hofGroup.rotation.y = Math.PI / 2;   // +x(방 안쪽=플레이어)를 향함
+  scene.add(hofGroup);
+  renderHallOfFame([]);
+}
+
+function renderHallOfFame(entries) {
+  if (!hofGroup) return;
+  hofGroup.clear();
+  const title = textPlane([
+    { text: '명예의 전당 · HALL OF FAME', size: 0.22, weight: 700, spacing: 0.05, color: '#f2d675' },
+    { text: '비밀의 방 도전 성공자 · クリア者', size: 0.11, color: '#cfc9bb' },
+  ], 4.6, 1.0, {});
+  title.position.set(0, 3.1, 0);
+  hofGroup.add(title);
+  const names = entries.slice(0, 12);
+  if (!names.length) {
+    const empty = textPlane([{ text: '첫 도전자가 되어 보세요 · 最初のクリア者になろう', size: 0.12, color: '#8f8c85' }], 4.4, 0.4, {});
+    empty.position.set(0, 2.2, 0); hofGroup.add(empty);
+    return;
+  }
+  names.forEach((e, i) => {
+    const label = (e.name || '익명') + (e.school ? '   ·   ' + e.school : '');
+    const t = textPlane([{ text: label, size: 0.15, weight: 500, color: '#f0eee9' }], 4.4, 0.34, {});
+    t.position.set(0, 2.5 - i * 0.34, 0);
+    hofGroup.add(t);
+  });
 }
 
 /* ═══════════════════ 마스코트 입간판(전신대) ═══════════════════ */
@@ -1437,6 +1587,9 @@ function buildMuseum(manifest) {
     // 난간을 피해 서쪽으로 빠져나와 처음(Day 1 입구)으로 순환
     wp(1.5, s1.zBottom + 1.2, 0)
   );
+
+  // 비밀의 방 챌린지(9와 3/4 승강장) — 시네마 동쪽 벽 뒤에 짓는다.
+  buildSecretEntrance(cinemaDef);
 }
 
 /* ═══════════════════ 플레이어 / 컨트롤 ═══════════════════ */
@@ -1671,11 +1824,14 @@ if (IS_TOUCH) {
 }
 
 /* ═══════════════════ 배경 음악 ═══════════════════ */
-// assets/bgm.mp3 가 있으면 입장 시 은은하게 루프 재생. 없으면 버튼도 나타나지 않는다.
+// 두 곡(assets/bgm.mp3, assets/bhm3.mp3)을 번갈아 무한 반복 재생. 없으면 버튼도 나타나지 않는다.
 const BGM_VOLUME = 0.14;
+const BGM_TRACKS = ['assets/bgm.mp3', 'assets/bhm3.mp3'];
 const bgmBtn = document.getElementById('bgmBtn');
-const bgm = new Audio('assets/bgm.mp3');
-bgm.loop = true; bgm.preload = 'auto'; bgm.volume = 0;
+let bgmTrack = 0;
+const bgm = new Audio(BGM_TRACKS[0]);
+bgm.loop = false;   // 한 곡이 끝나면 다음 곡으로 넘어간다(아래 'ended' 참조)
+bgm.preload = 'auto'; bgm.volume = 0;
 let bgmAvailable = false, bgmOn = false, bgmTarget = 0;
 bgm.addEventListener('canplaythrough', () => {
   bgmAvailable = true;
@@ -1683,7 +1839,19 @@ bgm.addEventListener('canplaythrough', () => {
   // 음원이 늦게 준비돼도 이미 입장해 있으면 바로 시작한다.
   if (document.body.classList.contains('playing')) startBgm();
 }, { once: true });
-bgm.addEventListener('error', () => { bgmAvailable = false; });
+// 곡이 끝나면 다음 곡으로 전환해 두 곡을 순환 재생한다.
+bgm.addEventListener('ended', () => {
+  bgmTrack = (bgmTrack + 1) % BGM_TRACKS.length;
+  bgm.src = BGM_TRACKS[bgmTrack]; bgm.load();
+  if (bgmOn) bgm.play().catch(() => {});
+});
+bgm.addEventListener('error', () => {
+  if (!bgmAvailable) return;   // 초기 로드 실패 → BGM 비활성
+  // 재생 중 특정 곡 오류 → 다음 곡으로 건너뛴다
+  bgmTrack = (bgmTrack + 1) % BGM_TRACKS.length;
+  bgm.src = BGM_TRACKS[bgmTrack]; bgm.load();
+  if (bgmOn) bgm.play().catch(() => {});
+});
 
 function startBgm() {
   if (!bgmAvailable || bgmOn) return;
@@ -2061,6 +2229,10 @@ function renderGuestbook(entries) {
     const head = document.createElement('div'); head.className = 'gbEntryHead';
     const name = document.createElement('span'); name.className = 'gbEntryName';
     name.textContent = e.name || '익명 · 匿名'; head.appendChild(name);
+    if (e.badge === 'secret') {
+      const badge = document.createElement('span'); badge.className = 'gbBadge';
+      badge.textContent = '🏆 기네스북 · クリア'; head.appendChild(badge);
+    }
     if (e.school) {
       const sc = document.createElement('span'); sc.className = 'gbEntrySchool';
       sc.textContent = e.school; head.appendChild(sc);
@@ -2155,6 +2327,200 @@ guestbookHudBtn.addEventListener('click', (e) => { e.stopPropagation(); openGues
 guestbookClose.addEventListener('click', closeGuestbook);
 guestbookPanel.addEventListener('keydown', (e) => {
   if (e.code === 'Escape') { e.preventDefault(); closeGuestbook(); }
+});
+
+/* ═══════════════════ 비밀의 방 챌린지: 퀴즈 · 보상 UI ═══════════════════ */
+const quizPanel = document.getElementById('quizPanel');
+const quizClose = document.getElementById('quizClose');
+const quizWarn = document.getElementById('quizWarn');
+const quizQuestion = document.getElementById('quizQuestion');
+const quizOptions = document.getElementById('quizOptions');
+const quizStatus = document.getElementById('quizStatus');
+let quizOpen = false, quizReturnFocus = null, quizControlsBefore = false;
+
+function openQuiz() {
+  if (quizOpen) return;
+  quizOpen = true;
+  quizReturnFocus = document.activeElement;
+  quizControlsBefore = controlsActive;
+  controlsActive = false;
+  if (document.pointerLockElement) document.exitPointerLock();
+  touchUIEl.setAttribute('aria-hidden', 'true'); touchUIEl.inert = true;
+  quizWarn.innerHTML = SECRET_QUIZ.redWarning || '';
+  quizQuestion.innerHTML = SECRET_QUIZ.question;
+  quizStatus.className = ''; quizStatus.textContent = '';
+  quizOptions.replaceChildren();
+  SECRET_QUIZ.options.forEach((opt, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = opt;
+    b.addEventListener('click', () => answerQuiz(i, b));
+    quizOptions.appendChild(b);
+  });
+  quizPanel.hidden = false;
+  quizPanel.setAttribute('aria-hidden', 'false');
+  quizClose.focus();
+  showHint(SECRET_QUIZ.gateHint);
+}
+
+function closeQuiz() {
+  if (!quizOpen) return;
+  quizOpen = false;
+  quizPanel.hidden = true;
+  quizPanel.setAttribute('aria-hidden', 'true');
+  controlsActive = quizControlsBefore;
+  touchUIEl.inert = !controlsActive;
+  touchUIEl.setAttribute('aria-hidden', controlsActive ? 'false' : 'true');
+  if (!IS_TOUCH && controlsActive && !autoTour.active) lockPointer();
+  else if (quizReturnFocus && typeof quizReturnFocus.focus === 'function') quizReturnFocus.focus();
+  quizReturnFocus = null;
+}
+
+function answerQuiz(i, btn) {
+  for (const bt of quizOptions.querySelectorAll('button')) bt.disabled = true;
+  if (i === SECRET_QUIZ.answer) {
+    quizStatus.className = ''; quizStatus.textContent = SECRET_QUIZ.correct;
+    setTimeout(() => { closeQuiz(); solveChallenge(); }, 750);
+  } else {
+    // 오답 → 로비로 추방, 처음부터 다시
+    quizStatus.className = 'warn'; quizStatus.textContent = SECRET_QUIZ.wrong;
+    setTimeout(() => { closeQuiz(); sendToLobby(); }, 1500);
+  }
+}
+
+// 로비 소환: 1층 로비 입구로 돌려보낸다. 다시 도전할 수 있도록 표지 트리거를 재장전한다.
+function sendToLobby(msg) {
+  challenge.armed = true;
+  switchFloor(0);
+  showHint(msg || '처음부터 다시! 로비로 돌아왔습니다<br>最初からやり直し！ロビーに戻りました');
+}
+
+quizClose.addEventListener('click', closeQuiz);
+quizPanel.addEventListener('keydown', (e) => { if (e.code === 'Escape') { e.preventDefault(); closeQuiz(); } });
+
+function solveChallenge() {
+  if (challenge.active) return;
+  challenge.solved = true;
+  challenge.active = true;
+  // 포털 콜라이더 제거 → 통과 가능
+  for (const c of secretPortalColliders) {
+    const idx = colliders.indexOf(c);
+    if (idx >= 0) colliders.splice(idx, 1);
+  }
+  secretPortalColliders = [];
+  // 벽돌 표지 열림 연출: 위로 사라지며 페이드
+  const mesh = secretPortalMesh, sign = challenge.signMesh;
+  if (mesh) {
+    mesh.material.transparent = true;
+    const t0 = performance.now();
+    const anim = () => {
+      const p = Math.min(1, (performance.now() - t0) / 900);
+      mesh.material.opacity = 1 - p;
+      mesh.position.y += 0.025;
+      if (sign) sign.material.opacity = 1 - p;
+      if (p < 1) requestAnimationFrame(anim);
+      else { mesh.visible = false; if (sign) sign.visible = false; }
+    };
+    anim();
+  }
+  showHint('스크린이 열렸어요! 화면 속으로 들어가 레이저를 피해 발판을 건너세요<br>スクリーンが開いた！画面の中へ入り、レーザーを避けて渡ろう');
+  startHofWatch();
+}
+
+function startHofWatch() {
+  if (hofUnsub) return;
+  Social.initSocial().then(() => {
+    hofUnsub = Social.watchGuestbook((entries) => {
+      renderHallOfFame(entries.filter((e) => e.badge === 'secret'));
+    });
+  });
+}
+
+/* ── 비밀의 방 보상: 영상 + 기네스북 기록 ── */
+const secretPanel = document.getElementById('secretPanel');
+const secretClose = document.getElementById('secretClose');
+const secretVideoWrap = document.getElementById('secretVideoWrap');
+const secretForm = document.getElementById('secretForm');
+const secretStatus = document.getElementById('secretStatus');
+const sfName = document.getElementById('sfName');
+const sfMessage = document.getElementById('sfMessage');
+const sfSubmit = document.getElementById('sfSubmit');
+const sfCount = document.getElementById('sfCount');
+let secretReturnFocus = null, secretControlsBefore = false;
+
+function openSecret() {
+  secretReturnFocus = document.activeElement;
+  secretControlsBefore = controlsActive;
+  controlsActive = false;
+  if (document.pointerLockElement) document.exitPointerLock();
+  touchUIEl.setAttribute('aria-hidden', 'true'); touchUIEl.inert = true;
+  secretVideoWrap.replaceChildren();
+  if (REWARD_VIDEO) {
+    const v = document.createElement('video');
+    v.src = REWARD_VIDEO; v.controls = true; v.autoplay = true; v.playsInline = true;
+    v.setAttribute('aria-label', '비밀 영상 · 秘密の映像');
+    secretVideoWrap.appendChild(v);
+  }
+  secretStatus.className = ''; secretStatus.textContent = '';
+  secretPanel.hidden = false;
+  secretPanel.setAttribute('aria-hidden', 'false');
+  secretClose.focus();
+  startHofWatch();
+}
+
+function closeSecret() {
+  const v = secretVideoWrap.querySelector('video');
+  if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+  secretVideoWrap.replaceChildren();
+  secretPanel.hidden = true;
+  secretPanel.setAttribute('aria-hidden', 'true');
+  controlsActive = secretControlsBefore;
+  touchUIEl.inert = !controlsActive;
+  touchUIEl.setAttribute('aria-hidden', controlsActive ? 'false' : 'true');
+  if (!IS_TOUCH && controlsActive && !autoTour.active) lockPointer();
+  else if (secretReturnFocus && typeof secretReturnFocus.focus === 'function') secretReturnFocus.focus();
+  secretReturnFocus = null;
+}
+
+secretClose.addEventListener('click', closeSecret);
+secretPanel.addEventListener('keydown', (e) => { if (e.code === 'Escape') { e.preventDefault(); closeSecret(); } });
+sfMessage.addEventListener('input', () => { sfCount.textContent = `${sfMessage.value.length} / 500`; });
+
+secretForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = sfName.value;
+  const school = secretForm.querySelector('input[name="sfSchool"]:checked')?.value || '';
+  const message = sfMessage.value;
+  if (!message.trim()) {
+    secretStatus.className = 'warn';
+    secretStatus.textContent = '소감을 입력해 주세요 · 感想を入力してください';
+    return;
+  }
+  const wait = Social.postCooldownLeft();
+  if (wait > 0) {
+    secretStatus.className = 'warn';
+    secretStatus.textContent = `잠시 후 다시 시도해 주세요 (${Math.ceil(wait / 1000)}초) · 少し待ってから`;
+    return;
+  }
+  sfSubmit.disabled = true;
+  try {
+    await Social.initSocial();
+    await Social.addGuestbookEntry({ name, school, message, badge: 'secret' });
+    sfMessage.value = ''; sfCount.textContent = '0 / 500';
+    secretStatus.className = '';
+    secretStatus.textContent = '기네스북에 기록되었습니다! · 記帳しました！';
+    // 로컬 모드는 실시간 스냅샷이 없으므로 명예의 전당을 즉시 다시 그린다.
+    if (Social.getMode() !== 'firebase') {
+      Social.watchGuestbook((entries) => renderHallOfFame(entries.filter((x) => x.badge === 'secret')));
+    }
+  } catch (err) {
+    secretStatus.className = 'warn';
+    secretStatus.textContent = err.message === 'COOLDOWN'
+      ? '잠시 후 다시 시도해 주세요 · 少し待ってから'
+      : '저장에 실패했습니다 · 保存に失敗しました';
+    console.warn('기네스북 저장 실패', err);
+  } finally {
+    sfSubmit.disabled = false;
+  }
 });
 
 /* 레이캐스트로 작품 찾기 */
@@ -2349,13 +2715,96 @@ function updatePlayer(dt) {
       lastRoomCheck = -1e9;
     }
   }
-  const groundEye = EYE + groundBase;
+  let groundEye = EYE + groundBase;
+  // 비밀의 방 점프맵: 기본 층 바닥 대신 발판/구덩이 높이를 쓴다.
+  if (inSecretZone(player)) groundEye = EYE + secretGroundY(player.pos);
   if (player.pos.y <= groundEye) {
     player.pos.y = groundEye; player.velY = 0; player.onGround = true;
   }
 
   camera.position.copy(player.pos);
   camera.rotation.set(player.pitch, player.yaw, 0);
+}
+
+/* ═══════════════════ 비밀의 방 점프맵 로직 ═══════════════════ */
+function inSecretZone(p) {
+  const b = challenge.bounds;
+  return challenge.active && b && p.floor === 1
+    && p.pos.x < b.wallX + 0.2 && p.pos.x > b.endX - 0.5
+    && p.pos.z > b.zS - 0.5 && p.pos.z < b.zN + 0.5;
+}
+
+// 플레이어 발밑의 지면 높이(월드 Y): 위에서 착지 가능한 가장 높은 발판, 없으면 구덩이.
+function secretGroundY(pos) {
+  const feet = pos.y - EYE;
+  let g = challenge.pitY;
+  for (const pf of platforms) {
+    if (pos.x >= pf.minX - RADIUS && pos.x <= pf.maxX + RADIUS
+        && pos.z >= pf.minZ - RADIUS && pos.z <= pf.maxZ + RADIUS
+        && pf.topY <= feet + LAND_TOL && pf.topY > g) {
+      g = pf.topY;
+    }
+  }
+  return g;
+}
+
+function respawnChallenge(msg) {
+  player.pos.copy(challenge.checkpoint);
+  player.yaw = challenge.checkpointYaw;
+  player.pitch = 0;
+  player.velY = 0; player.onGround = true;
+  camera.position.copy(player.pos);
+  camera.rotation.set(player.pitch, player.yaw, 0);
+  if (msg) showHint(msg);
+}
+
+function updateChallenge(dt) {
+  const b = challenge.bounds;
+  if (!b) return;
+
+  // 표지 접근 → 퀴즈 (미해결 상태에서 시네마 안쪽에서 벽으로 다가설 때)
+  if (!challenge.solved && controlsActive && !quizOpen && player.floor === 1) {
+    const nearPortal = player.pos.x < b.wallX + 1.4 && player.pos.x > b.wallX
+      && player.pos.z > b.cz - PORTAL_W / 2 - 0.3 && player.pos.z < b.cz + PORTAL_W / 2 + 0.3;
+    if (nearPortal && challenge.armed) { challenge.armed = false; openQuiz(); }
+    // 존을 충분히 벗어나면 다시 장전
+    if (player.pos.x > b.wallX + 3.0) challenge.armed = true;
+  }
+
+  if (!challenge.active) return;
+  challenge.clock += dt;
+
+  // 레이저 부드러운 상하 이동 + 접촉 판정
+  const inZone = inSecretZone(player);
+  for (const L of lasers) {
+    // 빔 높이: topY+0.2 ~ topY+3.6 사이를 부드럽게 왕복
+    const y = L.baseY + 1.9 + 1.7 * Math.sin(challenge.clock * L.speed + L.phase);
+    L.bar.position.y = y; L.glow.position.y = y;
+    // 몸통[발~머리]이 빔 밴드[y-0.28, y+0.28]와 겹치면 접촉
+    if (!challenge.reached && inZone
+        && Math.abs(player.pos.x - L.x) < 0.45
+        && player.pos.z > L.zMin && player.pos.z < L.zMax
+        && (player.pos.y + 0.1) > y - 0.28 && (player.pos.y - EYE) < y + 0.28) {
+      respawnChallenge('레이저에 닿았어요! 다시 · レーザーに触れました！もう一度');
+      return;
+    }
+  }
+
+  // 낙사 → 로비로 소환 (처음부터 다시 걸어 올라와야 한다)
+  if (!challenge.reached && inZone && (player.pos.y - EYE) <= challenge.pitY + 0.2) {
+    sendToLobby('떨어졌어요! 로비로 소환되었습니다<br>落ちました！ロビーに召喚されました');
+    return;
+  }
+
+  // 비밀의 방 도달 → 보상
+  if (!challenge.reached && inZone && challenge.roomTrigger) {
+    const r = challenge.roomTrigger;
+    if (player.pos.x >= r.minX && player.pos.x <= r.maxX
+        && player.pos.z >= r.minZ && player.pos.z <= r.maxZ) {
+      challenge.reached = true;
+      openSecret();
+    }
+  }
 }
 
 /* ═══════════════════ 시작 ═══════════════════ */
@@ -2411,6 +2860,7 @@ function loop() {
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePlayer(dt);
+  updateChallenge(dt);
   updateRooms(performance.now());
   updateBgm(dt);
   if (cinemaCtl) cinemaCtl.update(dt);
@@ -2423,6 +2873,7 @@ loop();
 // 개발용 디버그 핸들
 window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera,
   tourStops, autoTour, startAutoTour, stopAutoTour,
+  challenge,
   get cinema() { return cinemaCtl; },
   get room() { return currentRoomIdx; },
   tp(x, z, yaw) { player.pos.set(x, EYE + player.floor * FLOOR_HEIGHT, z); player.yaw = yaw; player.pitch = 0; },

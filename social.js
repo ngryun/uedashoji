@@ -113,6 +113,7 @@ export function watchGuestbook(cb) {
       (snap) => cb(snap.docs.map((d) => {
         const v = d.data();
         return { id: d.id, name: v.name, school: v.school, message: v.message,
+          badge: v.badge || null,
           createdAt: v.createdAt?.toMillis ? v.createdAt.toMillis() : Date.now() };
       })),
       (err) => { console.warn('[social] 방명록 구독 오류', err); cb(readJSON(LS_GUEST, [])); });
@@ -122,7 +123,8 @@ export function watchGuestbook(cb) {
 }
 
 // 방명록 작성. 성공 시 저장된 엔트리 형태 반환.
-export async function addGuestbookEntry({ name, school, message }) {
+// badge: 'secret' 이면 "기네스북"(비밀의 방 도전 성공자) 뱃지를 함께 저장한다.
+export async function addGuestbookEntry({ name, school, message, badge }) {
   const clean = {
     name: String(name || '').trim().slice(0, NAME_MAX) || '익명 · 匿名',
     school: String(school || '').trim().slice(0, 40),
@@ -130,15 +132,19 @@ export async function addGuestbookEntry({ name, school, message }) {
   };
   if (!clean.message) throw new Error('EMPTY_MESSAGE');
   if (postCooldownLeft() > 0) throw new Error('COOLDOWN');
+  const badgeVal = badge === 'secret' ? 'secret' : null;
 
   if (mode === 'firebase') {
-    await fb.addDoc(fb.collection(fb.db, 'guestbook'),
-      { ...clean, createdAt: fb.serverTimestamp() });
+    const doc = { ...clean, createdAt: fb.serverTimestamp() };
+    if (badgeVal) doc.badge = badgeVal;
+    await fb.addDoc(fb.collection(fb.db, 'guestbook'), doc);
   } else {
     const list = readJSON(LS_GUEST, []);
-    list.unshift({ id: 'local-' + Date.now(), ...clean, createdAt: Date.now() });
+    const entry = { id: 'local-' + Date.now(), ...clean, createdAt: Date.now() };
+    if (badgeVal) entry.badge = badgeVal;
+    list.unshift(entry);
     writeJSON(LS_GUEST, list.slice(0, 200));
   }
   localStorage.setItem(LS_LASTPOST, String(Date.now()));
-  return clean;
+  return badgeVal ? { ...clean, badge: badgeVal } : clean;
 }

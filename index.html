@@ -33,6 +33,16 @@
   }
   #start .ko { font-size: clamp(13px, 3vw, 17px); letter-spacing: .18em; color: #b9b5ac; margin-bottom: 6px; }
   #start .line { width: 56px; height: 1px; background: #8b867c; margin: 10px 0 16px; }
+  #start .secretTeaser {
+    max-width: 640px; margin: 14px 0 4px; font-size: clamp(12.5px, 2.8vw, 15px);
+    line-height: 1.9; letter-spacing: .1em; font-weight: 300; font-style: italic;
+    color: #d8b96a; text-wrap: balance; word-break: keep-all;
+    text-shadow: 0 0 18px rgba(216,185,106,.28);
+  }
+  #start .secretTeaser span[lang="ja"] {
+    display: block; font-style: normal; font-size: .82em; color: #9a8a5e;
+    letter-spacing: .08em; margin-top: 7px;
+  }
   #start .help {
     font-size: clamp(11px, 2.6vw, 13.5px); line-height: 2; color: #a7a49d;
     background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.09);
@@ -200,6 +210,60 @@
   .gbEntryMsg { font-size: 13.5px; line-height: 1.65; color: #d7d4cd; white-space: pre-wrap; word-break: break-word; }
   #gbEmpty { color: #8f8c85; font-size: 13px; padding: 24px 0; text-align: center; }
 
+  /* ── 기네스북 뱃지 (방명록 안에서 도전 성공자 표시) ── */
+  .gbBadge {
+    display: inline-block; margin-left: 2px; padding: 1px 9px; border-radius: 999px;
+    font-size: 10px; letter-spacing: .06em; font-weight: 700; color: #241c00;
+    background: linear-gradient(180deg, #ffe07a, #f5b301);
+  }
+
+  /* ── 9¾ 퀴즈 · 비밀의 방 패널 (방명록 스타일 재사용) ── */
+  #quizPanel, #secretPanel {
+    position: fixed; inset: 0; z-index: 57; overflow-y: auto; touch-action: pan-y;
+    color: #e8e6e1; background: #16191e; padding: 0 18px 40px;
+  }
+  #quizInner, #secretInner { max-width: 640px; margin: 0 auto; }
+  #quizWarn:not(:empty) {
+    margin-top: 22px; padding: 14px 16px; border-radius: 10px;
+    border: 1px solid rgba(255,70,80,.4); background: rgba(255,45,58,.08);
+    color: #ff5b66; font-size: 14px; font-weight: 600; letter-spacing: .06em; line-height: 1.7;
+    word-break: keep-all; text-shadow: 0 0 14px rgba(255,60,70,.35);
+  }
+  #quizWarn span[lang="ja"] { display: block; font-size: .85em; font-weight: 500; opacity: .9; margin-top: 4px; }
+  #quizQuestion, #secretCongrats { font-size: 15px; line-height: 1.75; padding: 16px 0 6px; word-break: keep-all; }
+  #quizOptions { display: flex; flex-direction: column; gap: 10px; padding: 14px 0 4px; }
+  #quizOptions button {
+    padding: 15px 18px; border-radius: 12px; border: 1px solid #3d424b; background: #21252c;
+    color: #ecebe6; font: inherit; font-size: 16px; letter-spacing: .05em; cursor: pointer; text-align: left;
+    transition: background .12s ease, border-color .12s ease;
+  }
+  #quizOptions button:hover { background: #2a2f38; border-color: #6ba7d6; }
+  #quizOptions button:disabled { opacity: .5; cursor: default; }
+  #quizStatus, #secretStatus { font-size: 13px; letter-spacing: .05em; color: #9fcf9f; min-height: 18px; padding: 8px 0; }
+  #quizStatus.warn, #secretStatus.warn { color: #f0c479; }
+  #secretVideoWrap:not(:empty) { padding: 8px 0 4px; }
+  #secretVideoWrap video { width: 100%; border-radius: 12px; background: #000; display: block; }
+  #secretNote { font-size: 12px; color: #9fcfff; letter-spacing: .04em; padding-top: 8px; line-height: 1.7; }
+  #secretForm { display: flex; flex-direction: column; gap: 12px; padding: 8px 0 6px; }
+  #secretForm input[type="text"], #secretForm textarea {
+    width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #3d424b;
+    background: #21252c; color: #ecebe6; font: inherit; font-size: 14px;
+  }
+  #secretForm textarea { min-height: 88px; resize: vertical; line-height: 1.6; }
+  #secretForm input:focus, #secretForm textarea:focus { outline: 2px solid #6ba7d6; border-color: #6ba7d6; }
+  #sfSchool { display: flex; gap: 8px; flex-wrap: wrap; }
+  #sfSchool label {
+    padding: 9px 14px; border-radius: 999px; border: 1px solid #555b65;
+    color: #cfccc5; background: #242931; cursor: pointer; font-size: 12.5px; letter-spacing: .04em;
+  }
+  #sfSchool input { position: absolute; opacity: 0; width: 0; height: 0; }
+  #sfSchool label:has(input:checked) { color: #17191d; background: #f0eee9; border-color: #f0eee9; }
+  #sfSubmitRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  #sfCount { font-size: 11.5px; color: #8f8c85; letter-spacing: .05em; }
+  #sfSubmit { padding: 12px 30px; border-radius: 999px; border: none; cursor: pointer; color: #14161a; background: #e8e6e1; font-size: 14px; letter-spacing: .1em; }
+  #sfSubmit:hover { background: #fff; }
+  #sfSubmit[disabled] { opacity: .45; cursor: default; }
+
   /* ── 모바일 컨트롤 ─────────────────────── */
   #touchUI { position: fixed; inset: 0; z-index: 20; display: none; pointer-events: none; touch-action: none; }
   body.touch.playing #touchUI { display: block; }
@@ -241,6 +305,7 @@
 <main id="start" aria-labelledby="museumTitle">
   <h1 class="jp" id="museumTitle">요나고미나미고등학교 설악고등학교 2026 국제교류<span class="jaLine" lang="ja">米子南高等学校 × 雪嶽高等学校 2026 国際交流</span></h1>
   <p class="ko">우에다 쇼지 사진미술관 콘셉트 · <span lang="ja">植田正治写真美術館コンセプト</span> · 2026. 7. 12 – 15</p>
+  <p class="secretTeaser">이 미술관에는 비밀이 숨겨져 있다.<br>이 비밀을 찾아내는 자! 설악산과 다이센산의 큰 복을 받을지어다.<span lang="ja">この美術館には秘密が隠されている。その秘密を見つけ出す者に、雪嶽山と大山の大いなる福があらんことを。</span></p>
   <div class="line"></div>
   <div class="help" id="helpDesktop">
     <b>W A S D</b> · 이동 · 移動 &nbsp;&nbsp; <b>마우스</b> · 시점 · 視点 &nbsp;&nbsp; <b>SHIFT</b> · 달리기 · 走る &nbsp;&nbsp; <b>SPACE</b> · 점프 · ジャンプ<br>
@@ -317,6 +382,45 @@
     <div id="gbMode"></div>
     <ul id="guestbookList" aria-live="polite"></ul>
     <div id="gbEmpty" hidden>아직 방명록이 없습니다. 첫 글을 남겨 주세요.<br><span lang="ja">まだ記帳がありません。最初のメッセージをどうぞ。</span></div>
+  </div>
+</section>
+
+<section id="quizPanel" role="dialog" aria-modal="true" aria-labelledby="quizTitle" aria-hidden="true" hidden>
+  <div id="quizInner">
+    <header class="galleryHeader">
+      <h2 id="quizTitle">9와 3/4 승강장 · <span lang="ja">9と3/4番線</span></h2>
+      <button id="quizClose" class="iconButton" type="button" aria-label="닫기 · 閉じる">✕</button>
+    </header>
+    <p id="quizWarn"></p>
+    <p id="quizQuestion"></p>
+    <div id="quizOptions" role="group" aria-label="보기 · 選択肢"></div>
+    <div id="quizStatus" role="status" aria-live="polite"></div>
+  </div>
+</section>
+
+<section id="secretPanel" role="dialog" aria-modal="true" aria-labelledby="secretTitle" aria-hidden="true" hidden>
+  <div id="secretInner">
+    <header class="galleryHeader">
+      <h2 id="secretTitle">🎉 비밀의 방 · <span lang="ja">秘密の部屋</span></h2>
+      <button id="secretClose" class="iconButton" type="button" aria-label="닫기 · 閉じる">✕</button>
+    </header>
+    <div id="secretVideoWrap"></div>
+    <p id="secretCongrats">도전 성공! 기네스북에 이름과 소감을 남겨 주세요.<br><span lang="ja">クリア！記念にお名前と感想を残してください。</span></p>
+    <form id="secretForm" autocomplete="off">
+      <input id="sfName" type="text" maxlength="40" required placeholder="이름 · お名前" aria-label="이름 · お名前">
+      <div id="sfSchool" role="radiogroup" aria-label="소속 · 所属">
+        <label><input type="radio" name="sfSchool" value="요나고미나미 · 米子南">요나고미나미 · 米子南</label>
+        <label><input type="radio" name="sfSchool" value="설악 · 雪嶽">설악 · 雪嶽</label>
+        <label><input type="radio" name="sfSchool" value="기타 · その他">기타 · その他</label>
+      </div>
+      <textarea id="sfMessage" maxlength="500" required placeholder="소감을 남겨 주세요 · 感想を残してください" aria-label="소감 · 感想"></textarea>
+      <div id="sfSubmitRow">
+        <span id="sfCount">0 / 500</span>
+        <button id="sfSubmit" type="submit">기네스북에 남기기 · 記帳する</button>
+      </div>
+    </form>
+    <div id="secretStatus" role="status" aria-live="polite"></div>
+    <p id="secretNote">✨ 이 기록은 방명록에도 “기네스북” 뱃지와 함께 표시됩니다 · この記録はゲストブックにも表示されます</p>
   </div>
 </section>
 

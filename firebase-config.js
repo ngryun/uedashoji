@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  Firebase 설정 (방명록 · 사진 좋아요 · 사진별 코멘트)
+//  Firebase 설정 (방명록)
 // ───────────────────────────────────────────────────────────────
 //  설정 방법:
 //  1) https://console.firebase.google.com 에서 프로젝트 생성
@@ -12,7 +12,7 @@
 //
 //  ※ 아래 apiKey 등은 "공개되어도 안전한" 값입니다(비밀키 아님).
 //     실제 보안은 Firestore 규칙으로 겁니다.
-//  ※ FIREBASE_ENABLED 가 false 이면 방명록·좋아요·코멘트가 이 브라우저에만
+//  ※ FIREBASE_ENABLED 가 false 이면 방명록이 이 브라우저에만
 //     저장되는 "로컬 모드"로 동작합니다(다른 사람과 공유되지 않음).
 // ═══════════════════════════════════════════════════════════════
 
@@ -27,7 +27,3 @@ export const firebaseConfig = {
 };
 
 export const FIREBASE_ENABLED = true;
-
-// 사진별 코멘트는 Firestore 규칙을 따로 게시하기 전까지 이 기기에만 저장합니다.
-// FIREBASE_SETUP.md의 규칙을 게시한 뒤 공유하려면 true로 바꾸세요.
-export const FIREBASE_PHOTO_COMMENTS_ENABLED = false;

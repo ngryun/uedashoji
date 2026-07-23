@@ -187,6 +187,14 @@
   #gbStatus { font-size: 12.5px; letter-spacing: .05em; color: #9fcf9f; min-height: 18px; padding: 2px 0 6px; }
   #gbStatus.warn { color: #f0c479; }
   #gbMode { font-size: 11px; color: #8f8c85; letter-spacing: .04em; padding-bottom: 12px; }
+  #gbSecretBadgeOption {
+    display: flex; align-items: center; gap: 9px; width: fit-content;
+    padding: 8px 13px; border: 1px solid rgba(245,179,1,.55); border-radius: 999px;
+    color: #ffe07a; background: rgba(245,179,1,.08); cursor: pointer;
+    font-size: 12px; font-weight: 650; letter-spacing: .04em;
+  }
+  #gbSecretBadgeOption[hidden] { display: none; }
+  #gbSecretBadgeOption input { accent-color: #f5b301; }
   #guestbookList { list-style: none; display: flex; flex-direction: column; gap: 10px; }
   #guestbookList li {
     border: 1px solid #2f343c; border-radius: 12px; background: #1d2127; padding: 13px 15px;
@@ -229,8 +237,6 @@
   #quizOptions button:disabled { opacity: .5; cursor: default; }
   #quizStatus, #secretStatus { font-size: 13px; letter-spacing: .05em; color: #9fcf9f; min-height: 18px; padding: 8px 0; }
   #quizStatus.warn, #secretStatus.warn { color: #f0c479; }
-  #secretVideoWrap:not(:empty) { padding: 8px 0 4px; }
-  #secretVideoWrap video { width: 100%; border-radius: 12px; background: #000; display: block; }
   #secretNote { font-size: 12px; color: #9fcfff; letter-spacing: .04em; padding-top: 8px; line-height: 1.7; }
   #secretForm { display: flex; flex-direction: column; gap: 12px; padding: 8px 0 6px; }
   #secretForm input[type="text"], #secretForm textarea {
@@ -355,6 +361,10 @@
         <label><input type="radio" name="gbSchool" value="설악 · 雪嶽">설악 · 雪嶽</label>
         <label><input type="radio" name="gbSchool" value="기타 · その他">기타 · その他</label>
       </div>
+      <label id="gbSecretBadgeOption" hidden>
+        <input id="gbSecretBadge" type="checkbox" checked disabled>
+        <span>🏆 ‘기네스북 · クリア’ 뱃지 달기</span>
+      </label>
       <textarea id="gbMessage" maxlength="500" required placeholder="방명록을 남겨 주세요 · メッセージを残してください" aria-label="메시지 · メッセージ"></textarea>
       <div id="gbSubmitRow">
         <span id="gbCount">0 / 500</span>
@@ -387,7 +397,6 @@
       <h2 id="secretTitle">🎉 비밀의 방 · <span lang="ja">秘密の部屋</span></h2>
       <button id="secretClose" class="iconButton" type="button" aria-label="닫기 · 閉じる">✕</button>
     </header>
-    <div id="secretVideoWrap"></div>
     <p id="secretCongrats">명예의 전당에 이름과 소감을 남겨주세요<br><span lang="ja">クリア！記念にお名前と感想を残してください。</span></p>
     <form id="secretForm" autocomplete="off">
       <input id="sfName" type="text" maxlength="40" required placeholder="이름 · お名前" aria-label="이름 · お名前">

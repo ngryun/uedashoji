@@ -23,6 +23,6 @@ export const SECRET_QUIZ = {
   correct: '정답! 벽이 열립니다… · 正解！壁が開きます…',
 };
 
-// 도전 성공(비밀의 방 도달) 시 재생할 "비밀 영상" 경로.
-// 선생님이 assets/videos/ 안의 파일 경로로 바꾸세요. null 이면 영상 없이 기록만 받습니다.
+// 도전 성공 후 영화관 반대편 벽에 해금되는 "비밀 영상" 경로.
+// 선생님이 assets/videos/ 안의 파일 경로로 바꾸세요. null 이면 프로젝션 없이 기록만 받습니다.
 export const REWARD_VIDEO = 'assets/videos/secret/secret.mp4';

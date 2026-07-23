@@ -36,10 +36,23 @@ const AUTO_DWELL_PHOTO = 4;   // 사진 앞 감상 시간 (s)
 const AUTO_DWELL_VIDEO = 9;   // 영상 앞 감상 시간 (s)
 
 /* ═══════════════════ 비밀의 방 챌린지 (요나고역 9와 3/4승강장) ═══════════════════ */
-// 2F 시네마 뒤쪽 표지 → 퀴즈 → 점프맵 → 비밀의 방(보상 영상 + 기네스북).
+// 2F 시네마 뒤쪽 표지 → 퀴즈 → 점프맵 → 비밀의 방(프로젝션 해금 + 기네스북).
+const SECRET_CLEAR_KEY = 'guest.secretClear.v1';
 const PORTAL_W = 3.0, PORTAL_H = 3.4;   // 시네마 동쪽 벽 표지(포털) 개구부 크기
 const LAND_TOL = 0.28;                  // 발판 착지 허용 오차 (위에서만 착지)
 const platforms = [];   // {minX,maxX,minZ,maxZ, topY} — 위에서만 착지하는 관대한 발판
+let secretClearInMemory = false;
+
+function hasSecretClear() {
+  if (secretClearInMemory) return true;
+  try {
+    const record = JSON.parse(localStorage.getItem(SECRET_CLEAR_KEY) || 'null');
+    return Boolean(record && Number.isFinite(Number(record.completedAt)));
+  } catch {
+    return false;
+  }
+}
+
 const challenge = {
   active: false,   // 퀴즈 통과 후 점프맵 활성
   solved: false,   // 퀴즈 통과 여부
@@ -52,6 +65,7 @@ const challenge = {
 let secretPortalColliders = [];  // 정답 시 통과 가능하도록 제거할 콜라이더
 let secretPortalMesh = null;     // 표지(벽돌 포털) 메시 — 정답 시 열림 연출
 let hofGroup = null, hofUnsub = null;   // 명예의 전당(3D 이름 벽)
+let secretProjectionCtl = null;         // 영화관 동쪽 벽의 해금형 특별영상 프로젝션
 
 // 한국어 요일 → 일본어 병기 ("(일)" → "(일·日)")
 const WEEKDAY_JA = { '일': '日', '월': '月', '화': '火', '수': '水', '목': '木', '금': '金', '토': '土' };
@@ -690,6 +704,163 @@ let cinemaInfo = null;  // {cz, screenX, screenY, viewX, roomIdx} — 자동 관
 const CINEMA_MIRROR = true;   // 서쪽 벽 스크린은 좌우 반전되어 보이므로 되돌린다
 const CINEMA_MAX_TEX = IS_TOUCH ? 640 : 1024;
 
+// 비밀의 방을 완주한 브라우저에만 나타나는 동쪽 벽 프로젝션.
+// 영상 파일은 세로형이므로 실제 메타데이터 비율에 맞춰 높이를 고정하고 폭을 조절한다.
+function buildSecretProjection(def, cz) {
+  const yBase = def.elevation;
+  const screenH = 3.6;
+  const initialAspect = 9 / 16;
+  const screenCenterY = yBase + 2.35;
+  const initiallyUnlocked = hasSecretClear();
+  const group = new THREE.Group();
+  group.position.set(def.W / 2 - 0.025, screenCenterY, cz);
+  group.rotation.y = -Math.PI / 2;   // 동쪽 벽에서 영화관 안쪽(-x)을 향함
+  group.visible = initiallyUnlocked && Boolean(REWARD_VIDEO);
+  scene.add(group);
+
+  const glow = new THREE.Mesh(shadowGeo, projectionGlowMat);
+  glow.position.z = 0.006;
+  glow.renderOrder = 1;
+  glow.visible = false;
+  group.add(glow);
+
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(screenH * initialAspect, screenH),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false })
+  );
+  plane.position.z = 0.014;
+  plane.renderOrder = 2;
+  plane.visible = false;
+  group.add(plane);
+
+  // 천장 프로젝터 리그와 투사광. 일반 영상 작품과 같은 재질을 써서 전시 톤을 맞춘다.
+  const ceilLocal = WALL_H - (screenCenterY - yBase);
+  const rodH = Math.max(0.1, ceilLocal - PROJECTOR_Y - 0.075);
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, rodH, 8), frameMat);
+  rod.position.set(0, PROJECTOR_Y + 0.075 + rodH / 2, PROJECTOR_DIST);
+  group.add(rod);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.15, 0.36), frameMat);
+  body.position.set(0, PROJECTOR_Y, PROJECTOR_DIST);
+  group.add(body);
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.06, 12), darkMat);
+  lens.rotation.x = Math.PI / 2;
+  lens.position.set(0, PROJECTOR_Y - 0.02, PROJECTOR_DIST - 0.2);
+  group.add(lens);
+  const beamGeo = new THREE.BufferGeometry();
+  const beam = new THREE.Mesh(beamGeo, beamMat);
+  beam.renderOrder = 3;
+  beam.visible = false;
+  group.add(beam);
+
+  const viewerArt = {
+    isVideo: true,
+    item: { type: 'video', file: REWARD_VIDEO },
+    specialLabel: '비밀의 방 특별영상 · 秘密の部屋 特別映像',
+    video: null,
+  };
+  plane.userData.art = viewerArt;
+
+  const ctl = {
+    group, plane, glow, beam, beamGeo, viewerArt,
+    video: null,
+    vtex: null,
+    unlocked: initiallyUnlocked,
+
+    fit(aspect) {
+      if (!Number.isFinite(aspect) || aspect <= 0) return;
+      const screenW = screenH * aspect;
+      plane.geometry.dispose();
+      plane.geometry = new THREE.PlaneGeometry(screenW, screenH);
+      glow.scale.set(screenW + 0.7, screenH + 0.7, 1);
+      const hw = screenW / 2 + 0.12, hh = screenH / 2 + 0.12;
+      const apex = [0, PROJECTOR_Y - 0.02, PROJECTOR_DIST - 0.22];
+      const corners = [[-hw, -hh, 0.02], [hw, -hh, 0.02], [hw, hh, 0.02], [-hw, hh, 0.02]];
+      const tris = [];
+      for (let i = 1; i < 4; i++) tris.push(apex, corners[i], corners[(i + 1) % 4]);
+      beamGeo.setAttribute('position', new THREE.Float32BufferAttribute(tris.flat(), 3));
+      beamGeo.computeBoundingSphere();
+    },
+
+    setUnlocked(unlocked) {
+      this.unlocked = Boolean(unlocked);
+      group.visible = this.unlocked && Boolean(REWARD_VIDEO);
+      if (!this.unlocked) this.release();
+    },
+
+    ensureVideo() {
+      if (this.video || !REWARD_VIDEO) return;
+      const video = document.createElement('video');
+      video.muted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.preload = 'auto';
+      video.crossOrigin = 'anonymous';
+      video.src = REWARD_VIDEO;
+      video.addEventListener('loadedmetadata', () => {
+        if (this.video === video) this.fit(video.videoWidth / video.videoHeight);
+      }, { once: true });
+      video.addEventListener('loadeddata', () => {
+        if (this.video !== video) return;
+        plane.visible = true;
+        glow.visible = true;
+      }, { once: true });
+      video.addEventListener('error', () => {
+        if (this.video === video) this.release();
+      }, { once: true });
+      this.video = video;
+      viewerArt.video = video;
+      const vtex = new THREE.VideoTexture(video);
+      vtex.colorSpace = THREE.SRGBColorSpace;
+      this.vtex = vtex;
+      plane.material.map = vtex;
+      plane.material.needsUpdate = true;
+    },
+
+    release() {
+      if (this.video) {
+        this.video.pause();
+        this.video.removeAttribute('src');
+        this.video.load();
+      }
+      if (this.vtex) this.vtex.dispose();
+      this.video = null;
+      this.vtex = null;
+      viewerArt.video = null;
+      plane.material.map = null;
+      plane.material.needsUpdate = true;
+      plane.visible = false;
+      glow.visible = false;
+      beam.visible = false;
+    },
+
+    canInteract() {
+      return this.unlocked && group.visible && plane.visible
+        && group.position.distanceTo(player.pos) < 8;
+    },
+
+    update() {
+      if (!this.unlocked || !REWARD_VIDEO) return;
+      const sameFloor = player.floor === def.floor;
+      const distance = sameFloor ? group.position.distanceTo(player.pos) : Infinity;
+      if (distance < NEAR_VIDEO && !viewerOpen) {
+        this.ensureVideo();
+        if (this.video) {
+          this.video.play().catch(() => {});
+          beam.visible = true;
+        }
+      } else if (this.video) {
+        if (distance > VIDEO_KEEP_DISTANCE) this.release();
+        else {
+          this.video.pause();
+          beam.visible = false;
+        }
+      }
+    },
+  };
+  ctl.fit(initialAspect);
+  secretProjectionCtl = ctl;
+}
+
 function buildCinema(def, roomGroup) {
   const { W, L, zFrom, zTo } = def;
   const yBase = def.elevation;
@@ -720,6 +891,7 @@ function buildCinema(def, roomGroup) {
   const eastInner = new THREE.Mesh(new THREE.PlaneGeometry(L, WALL_H), innerMat);
   eastInner.position.set(W / 2 - 0.02, yBase + WALL_H / 2, cz); eastInner.rotation.y = -Math.PI / 2;
   scene.add(eastInner);
+  buildSecretProjection(def, cz);
   baseboard(-W / 2 + 0.03, cz, L, false, yBase);
   baseboard(W / 2 - 0.03, cz, L, false, yBase);
 
@@ -1998,7 +2170,8 @@ function openViewer(art, trigger = null) {
     if (art.video) art.video.pause();
     const v = document.createElement('video');
     v.src = art.item.file; v.controls = true; v.autoplay = true; v.playsInline = true;
-    v.setAttribute('aria-label', `${art.dayLabel} 영상·映像 No.${String(art.idxInDay).padStart(3, '0')}`);
+    v.setAttribute('aria-label', art.specialLabel
+      || `${art.dayLabel} 영상·映像 No.${String(art.idxInDay).padStart(3, '0')}`);
     viewerBody.appendChild(v);
   } else {
     const im = document.createElement('img');
@@ -2006,7 +2179,8 @@ function openViewer(art, trigger = null) {
     im.alt = `${art.dayLabel} 사진·写真 No.${String(art.idxInDay).padStart(3, '0')}`;
     viewerBody.appendChild(im);
   }
-  viewerCap.textContent = `${art.dayLabel}  ·  No.${String(art.idxInDay).padStart(3, '0')}`;
+  viewerCap.textContent = art.specialLabel
+    || `${art.dayLabel}  ·  No.${String(art.idxInDay).padStart(3, '0')}`;
   viewerEl.classList.add('show');
   viewerEl.setAttribute('aria-hidden', 'false');
   viewerCloseBtn.focus();
@@ -2140,6 +2314,8 @@ const gbCount = document.getElementById('gbCount');
 const gbStatus = document.getElementById('gbStatus');
 const gbMode = document.getElementById('gbMode');
 const gbEmpty = document.getElementById('gbEmpty');
+const gbSecretBadgeOption = document.getElementById('gbSecretBadgeOption');
+const gbSecretBadge = document.getElementById('gbSecretBadge');
 let gbReturnFocus = null, gbFromStart = true, gbControlsBefore = false, gbUnsub = null;
 let gbOpenSeq = 0;
 
@@ -2182,6 +2358,10 @@ async function openGuestbook() {
   if (document.pointerLockElement) document.exitPointerLock();
   if (gbFromStart) { startEl.setAttribute('aria-hidden', 'true'); startEl.inert = true; }
   touchUIEl.setAttribute('aria-hidden', 'true');
+  const canUseSecretBadge = hasSecretClear();
+  gbSecretBadgeOption.hidden = !canUseSecretBadge;
+  gbSecretBadge.disabled = !canUseSecretBadge;
+  gbSecretBadge.checked = canUseSecretBadge;
   guestbookPanel.hidden = false;
   guestbookPanel.setAttribute('aria-hidden', 'false');
   if (gbUnsub) { gbUnsub(); gbUnsub = null; }
@@ -2216,6 +2396,7 @@ guestbookForm.addEventListener('submit', async (e) => {
   const name = gbName.value;
   const school = guestbookForm.querySelector('input[name="gbSchool"]:checked')?.value || '';
   const message = gbMessage.value;
+  const badge = !gbSecretBadgeOption.hidden && gbSecretBadge.checked ? 'secret' : null;
   if (!message.trim()) {
     gbStatus.className = 'warn';
     gbStatus.textContent = '메시지를 입력해 주세요 · メッセージを入力してください';
@@ -2230,7 +2411,7 @@ guestbookForm.addEventListener('submit', async (e) => {
   gbSubmit.disabled = true;
   try {
     await Social.initSocial();
-    await Social.addGuestbookEntry({ name, school, message });
+    await Social.addGuestbookEntry({ name, school, message, badge });
     gbMessage.value = ''; gbCount.textContent = '0 / 500';
     gbStatus.className = '';
     gbStatus.textContent = '남겨 주셔서 감사합니다 · ありがとうございました';
@@ -2363,10 +2544,9 @@ function startHofWatch() {
   });
 }
 
-/* ── 비밀의 방 보상: 영상 + 기네스북 기록 ── */
+/* ── 비밀의 방 보상: 완주 기록 + 기네스북 기록 ── */
 const secretPanel = document.getElementById('secretPanel');
 const secretClose = document.getElementById('secretClose');
-const secretVideoWrap = document.getElementById('secretVideoWrap');
 const secretForm = document.getElementById('secretForm');
 const secretStatus = document.getElementById('secretStatus');
 const sfName = document.getElementById('sfName');
@@ -2381,13 +2561,6 @@ function openSecret() {
   controlsActive = false;
   if (document.pointerLockElement) document.exitPointerLock();
   touchUIEl.setAttribute('aria-hidden', 'true'); touchUIEl.inert = true;
-  secretVideoWrap.replaceChildren();
-  if (REWARD_VIDEO) {
-    const v = document.createElement('video');
-    v.src = REWARD_VIDEO; v.controls = true; v.autoplay = true; v.playsInline = true;
-    v.setAttribute('aria-label', '비밀 영상 · 秘密の映像');
-    secretVideoWrap.appendChild(v);
-  }
   secretStatus.className = ''; secretStatus.textContent = '';
   secretPanel.hidden = false;
   secretPanel.setAttribute('aria-hidden', 'false');
@@ -2396,9 +2569,6 @@ function openSecret() {
 }
 
 function closeSecret() {
-  const v = secretVideoWrap.querySelector('video');
-  if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
-  secretVideoWrap.replaceChildren();
   secretPanel.hidden = true;
   secretPanel.setAttribute('aria-hidden', 'true');
   controlsActive = secretControlsBefore;
@@ -2459,6 +2629,7 @@ function tryViewAt(sx, sy) {
   raycaster.far = 7;
   const meshes = [];
   for (const a of artworks) if (a.group.parent && a.pos.distanceTo(player.pos) < 8) meshes.push(a.plane);
+  if (secretProjectionCtl?.canInteract()) meshes.push(secretProjectionCtl.plane);
   const hits = raycaster.intersectObjects(meshes, false);
   if (hits.length) openViewer(hits[0].object.userData.art);
 }
@@ -2704,6 +2875,11 @@ function updateChallenge() {
     if (player.pos.x >= r.minX && player.pos.x <= r.maxX
         && player.pos.z >= r.minZ && player.pos.z <= r.maxZ) {
       challenge.reached = true;
+      secretClearInMemory = true;
+      try {
+        localStorage.setItem(SECRET_CLEAR_KEY, JSON.stringify({ completedAt: Date.now() }));
+      } catch {}
+      secretProjectionCtl?.setUnlocked(true);
       openSecret();
     }
   }
@@ -2719,7 +2895,7 @@ async function init() {
     const manifest = await res.json();
     buildMuseum(manifest);
     build2DGallery(manifest);
-    // 시각 검수용: ?preview=video 또는 ?preview=day2-stair로 시작 위치를 바꾼다.
+    // 시각 검수용: ?preview=video, day2-stair, secret-projection으로 시작 위치를 바꾼다.
     const preview = new URLSearchParams(location.search).get('preview');
     if (preview === 'video') {
       const previewArt = artworks.find(art => art.isVideo);
@@ -2739,6 +2915,15 @@ async function init() {
         player.yaw = 0;
         updateFloorNav(0);
       }
+    } else if (preview === 'secret-projection' && secretProjectionCtl && cinemaInfo
+        && (location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+      // 로컬 개발 서버에서만 저장된 완주 기록에 손대지 않고 해금 UI·프로젝션을 검수한다.
+      secretClearInMemory = true;
+      secretProjectionCtl.setUnlocked(true);
+      player.floor = 1;
+      spawnPoint.set(3.2, EYE + FLOOR_HEIGHT, cinemaInfo.cz);
+      player.yaw = -Math.PI / 2;
+      updateFloorNav(1);
     }
     player.pos.copy(spawnPoint);
     camera.position.copy(player.pos);
@@ -2766,6 +2951,7 @@ function loop() {
   updateRooms(performance.now());
   updateBgm(dt);
   if (cinemaCtl) cinemaCtl.update(dt);
+  if (secretProjectionCtl) secretProjectionCtl.update();
   renderer.render(scene, camera);
 }
 
@@ -2777,11 +2963,16 @@ window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera
   tourStops, autoTour, startAutoTour, stopAutoTour,
   challenge,
   get cinema() { return cinemaCtl; },
+  get secretProjection() { return secretProjectionCtl; },
   get room() { return currentRoomIdx; },
   tp(x, z, yaw) { player.pos.set(x, EYE + player.floor * FLOOR_HEIGHT, z); player.yaw = yaw; player.pitch = 0; },
   floor(n) { switchFloor(Math.max(0, Math.min(1, n))); },
   step(n = 1) { // rAF가 멈춘 환경에서 수동 프레임 진행 (테스트용)
-    for (let i = 0; i < n; i++) { updatePlayer(1 / 60); if (cinemaCtl) cinemaCtl.update(1 / 60); }
+    for (let i = 0; i < n; i++) {
+      updatePlayer(1 / 60);
+      if (cinemaCtl) cinemaCtl.update(1 / 60);
+      if (secretProjectionCtl) secretProjectionCtl.update();
+    }
     lastRoomCheck = -1e9;
     updateRooms(performance.now());
     camera.position.copy(player.pos);

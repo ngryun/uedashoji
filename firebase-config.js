@@ -8,7 +8,8 @@
 //  3) 프로젝트 설정(⚙️) > 일반 > 내 앱 > 웹 앱(</>) 추가 →
 //     firebaseConfig 값을 복사해 아래에 붙여넣기
 //  4) FIREBASE_ENABLED 를 true 로 변경
-//  5) Firestore "규칙(Rules)" 탭에 README/설명의 보안 규칙을 붙여넣고 게시
+//  5) Authentication > 로그인 방법에서 "익명" 제공업체를 사용 설정
+//  6) Firestore "규칙(Rules)" 탭에 FIREBASE_SETUP.md의 보안 규칙을 붙여넣고 게시
 //
 //  ※ 아래 apiKey 등은 "공개되어도 안전한" 값입니다(비밀키 아님).
 //     실제 보안은 Firestore 규칙으로 겁니다.

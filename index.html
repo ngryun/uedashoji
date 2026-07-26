@@ -178,12 +178,17 @@
   #gbSchool label:has(input:checked) { color: #17191d; background: #f0eee9; border-color: #f0eee9; }
   #gbSubmitRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   #gbCount { font-size: 11.5px; color: #8f8c85; letter-spacing: .05em; }
-  #gbSubmit {
+  #gbFormActions { display: flex; align-items: center; gap: 8px; }
+  #gbSubmit, #gbCancel {
     padding: 12px 30px; border-radius: 999px; border: none; cursor: pointer;
     color: #14161a; background: #e8e6e1; font-size: 14px; letter-spacing: .1em;
   }
   #gbSubmit:hover { background: #fff; }
   #gbSubmit[disabled] { opacity: .45; cursor: default; }
+  #gbCancel {
+    padding-inline: 18px; color: #d7d4cd; background: #343a43;
+  }
+  #gbCancel:hover { background: #414955; }
   #gbStatus { font-size: 12.5px; letter-spacing: .05em; color: #9fcf9f; min-height: 18px; padding: 2px 0 6px; }
   #gbStatus.warn { color: #f0c479; }
   #gbMode { font-size: 11px; color: #8f8c85; letter-spacing: .04em; padding-bottom: 12px; }
@@ -204,6 +209,12 @@
   .gbEntrySchool { font-size: 11px; color: #9fcfff; letter-spacing: .05em; }
   .gbEntryTime { font-size: 11px; color: #7d7a73; margin-left: auto; }
   .gbEntryMsg { font-size: 13.5px; line-height: 1.65; color: #d7d4cd; white-space: pre-wrap; word-break: break-word; }
+  .gbEdited { color: #777d86; font-size: 10px; }
+  .gbEditBtn {
+    flex: 0 0 auto; padding: 4px 9px; border: 1px solid #4a5360; border-radius: 999px;
+    color: #bcdcff; background: #252b33; cursor: pointer; font-size: 10.5px; letter-spacing: .04em;
+  }
+  .gbEditBtn:hover { color: #fff; border-color: #79a9d3; }
   #gbEmpty { color: #8f8c85; font-size: 13px; padding: 24px 0; text-align: center; }
 
   /* ── 기네스북 뱃지 (방명록 안에서 도전 성공자 표시) ── */
@@ -368,7 +379,10 @@
       <textarea id="gbMessage" maxlength="500" required placeholder="방명록을 남겨 주세요 · メッセージを残してください" aria-label="메시지 · メッセージ"></textarea>
       <div id="gbSubmitRow">
         <span id="gbCount">0 / 500</span>
-        <button id="gbSubmit" type="submit">남기기 · 記帳する</button>
+        <span id="gbFormActions">
+          <button id="gbCancel" type="button" hidden>취소 · キャンセル</button>
+          <button id="gbSubmit" type="submit">남기기 · 記帳する</button>
+        </span>
       </div>
     </form>
     <div id="gbStatus" role="status" aria-live="polite"></div>

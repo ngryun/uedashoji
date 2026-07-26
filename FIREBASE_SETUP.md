@@ -31,47 +31,82 @@ export const FIREBASE_ENABLED = true;   // ← true 로 변경
 
 > `apiKey` 등은 공개되어도 안전한 값입니다(비밀키 아님). 실제 보안은 아래 규칙으로 겁니다.
 
-## 3. 보안 규칙(Rules) 붙여넣기
+## 3. 로그인 화면 없는 브라우저 작성자 인증 켜기
+
+1. Firebase Console 왼쪽 메뉴 **빌드 → Authentication → 시작하기**
+2. **Sign-in method(로그인 방법)** 탭에서 **익명(Anonymous)** 제공업체를 사용 설정
+
+사용자에게 로그인 화면은 나타나지 않습니다. Firebase가 브라우저마다 익명 작성자 ID를 자동 발급하며,
+그 ID로 **같은 브라우저에서 새로 작성한 글만 수정**할 수 있게 합니다. 브라우저 저장 데이터를 지우거나
+다른 브라우저·기기로 이동하면 기존 작성자 ID를 복구할 수 없습니다.
+
+## 4. 보안 규칙(Rules) 붙여넣기
 
 Firestore Database → **규칙(Rules)** 탭에 아래 내용을 붙여넣고 **게시(Publish)** 하세요.
-로그인 없이 누구나 쓸 수 있지만, 형식과 길이를 제한합니다.
+누구나 읽고 쓸 수 있지만, 수정은 해당 글을 작성한 익명 작성자에게만 허용합니다.
+`badge` 필드를 명시적으로 허용하므로 완주 뱃지를 체크한 글도 정상 저장됩니다.
 
 ```
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 방명록: 누구나 읽기/작성, 수정·삭제는 콘솔(관리자)에서만
-    // badge 는 선택 필드 — "기네스북"(비밀의 방 도전 성공자) 표시용. 값은 'secret' 만 허용.
+    function validGuestbook(data) {
+      return data.keys().hasOnly([
+               'name', 'school', 'message', 'createdAt', 'editedAt', 'badge', 'ownerId'
+             ])
+             && data.keys().hasAll(['name', 'school', 'message', 'createdAt'])
+             && data.name is string
+             && data.name.size() <= 40
+             && data.school is string
+             && data.school.size() <= 40
+             && data.message is string
+             && data.message.size() >= 1
+             && data.message.size() <= 500
+             && (!('badge' in data) || data.badge == 'secret')
+             && (!('ownerId' in data)
+                 || (data.ownerId is string && data.ownerId.size() > 0));
+    }
+
     match /guestbook/{id} {
       allow read: if true;
-      allow create: if request.resource.data.keys().hasOnly(['name','school','message','createdAt','badge'])
-                    && request.resource.data.keys().hasAll(['name','school','message','createdAt'])
-                    && request.resource.data.name is string
-                    && request.resource.data.name.size() <= 40
-                    && request.resource.data.school is string
-                    && request.resource.data.school.size() <= 40
-                    && request.resource.data.message is string
-                    && request.resource.data.message.size() >= 1
-                    && request.resource.data.message.size() <= 500
+
+      // 익명 인증이 아직 켜지지 않은 배포에서도 작성은 유지하되,
+      // ownerId가 있는 새 글만 브라우저 소유 글로 인정한다.
+      allow create: if validGuestbook(request.resource.data)
                     && request.resource.data.createdAt == request.time
-                    && (!('badge' in request.resource.data)
-                        || request.resource.data.badge == 'secret');
-      allow update, delete: if false;
+                    && !('editedAt' in request.resource.data)
+                    && (!('ownerId' in request.resource.data)
+                        || (request.auth != null
+                            && request.resource.data.ownerId == request.auth.uid));
+
+      allow update: if request.auth != null
+                    && resource.data.ownerId == request.auth.uid
+                    && request.resource.data.ownerId == resource.data.ownerId
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.editedAt == request.time
+                    && validGuestbook(request.resource.data)
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['name', 'school', 'message', 'badge', 'editedAt']);
+
+      allow delete: if false;
     }
   }
 }
 ```
 
-## 4. 확인
+## 5. 확인
 
 사이트를 새로고침한 뒤:
 - 방명록을 열면 "모든 관람객과 실시간으로 공유됩니다" 문구가 보입니다(로컬 모드면 "이 브라우저에만 저장").
 - 다른 기기/브라우저에서 남긴 글이 실시간으로 함께 보이면 성공입니다.
+- 새로 작성한 글에 **수정 · 編集** 버튼이 표시되고, 수정 후 **수정됨 · 編集済み**이 표시되면 익명 인증과 규칙이 정상입니다.
+- 완주 후 뱃지를 체크한 글이 `🏆 기네스북 · クリア`와 함께 저장되는지 확인합니다.
 
 ## 관리(모더레이션)
 
-- 부적절한 방명록 글은 Firestore 콘솔의 **guestbook** 컬렉션에서 해당 문서를 직접 삭제하세요(사이트에서는 삭제 불가).
+- 사용자는 같은 브라우저에서 자신이 새로 작성한 글만 수정할 수 있습니다. 삭제는 사이트에서 허용하지 않습니다.
+- 부적절한 방명록 글은 Firestore 콘솔의 **guestbook** 컬렉션에서 해당 문서를 직접 삭제하세요.
 - 로그인이 없어 완벽한 도배 차단은 어렵습니다. 현재 클라이언트에서 방명록 작성 간격을 20초로 제한합니다.
 
 ## 비용

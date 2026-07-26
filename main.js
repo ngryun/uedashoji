@@ -2310,6 +2310,7 @@ const guestbookList = document.getElementById('guestbookList');
 const gbName = document.getElementById('gbName');
 const gbMessage = document.getElementById('gbMessage');
 const gbSubmit = document.getElementById('gbSubmit');
+const gbCancel = document.getElementById('gbCancel');
 const gbCount = document.getElementById('gbCount');
 const gbStatus = document.getElementById('gbStatus');
 const gbMode = document.getElementById('gbMode');
@@ -2318,6 +2319,7 @@ const gbSecretBadgeOption = document.getElementById('gbSecretBadgeOption');
 const gbSecretBadge = document.getElementById('gbSecretBadge');
 let gbReturnFocus = null, gbFromStart = true, gbControlsBefore = false, gbUnsub = null;
 let gbOpenSeq = 0;
+let gbEditingId = null;
 
 function fmtTime(ms) {
   const d = new Date(ms); const p = (n) => String(n).padStart(2, '0');
@@ -2342,15 +2344,66 @@ function renderGuestbook(entries) {
       sc.textContent = e.school; head.appendChild(sc);
     }
     const time = document.createElement('span'); time.className = 'gbEntryTime';
-    time.textContent = fmtTime(e.createdAt); head.appendChild(time);
+    time.textContent = fmtTime(e.createdAt);
+    if (e.editedAt) {
+      const edited = document.createElement('span'); edited.className = 'gbEdited';
+      edited.textContent = ' · 수정됨 · 編集済み'; time.appendChild(edited);
+    }
+    head.appendChild(time);
+    if (e.editable) {
+      const edit = document.createElement('button');
+      edit.type = 'button'; edit.className = 'gbEditBtn';
+      edit.textContent = '수정 · 編集';
+      edit.addEventListener('click', () => beginGuestbookEdit(e));
+      head.appendChild(edit);
+    }
     const msg = document.createElement('div'); msg.className = 'gbEntryMsg';
     msg.textContent = e.message;
     li.append(head, msg); guestbookList.appendChild(li);
   }
 }
 
+function setGuestbookBadgeOption(extraAllowed = false, checked = false) {
+  const allowed = hasSecretClear() || extraAllowed;
+  gbSecretBadgeOption.hidden = !allowed;
+  gbSecretBadge.disabled = !allowed;
+  gbSecretBadge.checked = allowed && checked;
+}
+
+function endGuestbookEdit(clearForm = true) {
+  gbEditingId = null;
+  gbSubmit.textContent = '남기기 · 記帳する';
+  gbCancel.hidden = true;
+  if (clearForm) {
+    guestbookForm.reset();
+    gbMessage.value = '';
+    gbCount.textContent = '0 / 500';
+  }
+  setGuestbookBadgeOption(false, hasSecretClear());
+}
+
+function beginGuestbookEdit(entry) {
+  if (!entry.editable) return;
+  gbEditingId = entry.id;
+  gbName.value = entry.name || '';
+  gbMessage.value = entry.message || '';
+  gbCount.textContent = `${gbMessage.value.length} / 500`;
+  for (const radio of guestbookForm.querySelectorAll('input[name="gbSchool"]')) {
+    radio.checked = radio.value === (entry.school || '');
+  }
+  setGuestbookBadgeOption(entry.badge === 'secret', entry.badge === 'secret');
+  gbSubmit.textContent = '수정 저장 · 変更を保存';
+  gbCancel.hidden = false;
+  gbStatus.className = '';
+  gbStatus.textContent = '내 글을 수정하고 있습니다 · 自分の投稿を編集中';
+  guestbookForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  gbMessage.focus();
+}
+
 async function openGuestbook() {
   const openSeq = ++gbOpenSeq;
+  endGuestbookEdit(true);
+  gbStatus.className = ''; gbStatus.textContent = '';
   gbReturnFocus = document.activeElement;
   gbFromStart = !startEl.classList.contains('hidden');
   gbControlsBefore = controlsActive;
@@ -2358,10 +2411,7 @@ async function openGuestbook() {
   if (document.pointerLockElement) document.exitPointerLock();
   if (gbFromStart) { startEl.setAttribute('aria-hidden', 'true'); startEl.inert = true; }
   touchUIEl.setAttribute('aria-hidden', 'true');
-  const canUseSecretBadge = hasSecretClear();
-  gbSecretBadgeOption.hidden = !canUseSecretBadge;
-  gbSecretBadge.disabled = !canUseSecretBadge;
-  gbSecretBadge.checked = canUseSecretBadge;
+  setGuestbookBadgeOption(false, hasSecretClear());
   guestbookPanel.hidden = false;
   guestbookPanel.setAttribute('aria-hidden', 'false');
   if (gbUnsub) { gbUnsub(); gbUnsub = null; }
@@ -2371,9 +2421,12 @@ async function openGuestbook() {
 
   await Social.initSocial();
   if (guestbookPanel.hidden || openSeq !== gbOpenSeq) return;
-  gbMode.textContent = Social.getMode() === 'firebase'
+  const editingNote = Social.canEditOwnEntries()
+    ? ' · 이 브라우저에서 작성한 새 글은 수정할 수 있습니다 · この端末で書いた新しい投稿は編集できます'
+    : ' · 익명 인증을 켜면 내 글을 수정할 수 있습니다 · 匿名認証を有効にすると編集できます';
+  gbMode.textContent = (Social.getMode() === 'firebase'
     ? '모든 관람객과 실시간으로 공유됩니다 · みんなとリアルタイムで共有されます'
-    : '지금은 이 브라우저에만 저장됩니다 · この端末のみに保存中';
+    : '지금은 이 브라우저에만 저장됩니다 · この端末のみに保存中') + editingNote;
   gbUnsub = Social.watchGuestbook(renderGuestbook);
   gbSubmit.disabled = false;
 }
@@ -2385,11 +2438,18 @@ function closeGuestbook() {
   guestbookPanel.setAttribute('aria-hidden', 'true');
   if (gbFromStart) { startEl.setAttribute('aria-hidden', 'false'); startEl.inert = false; }
   else { controlsActive = gbControlsBefore; if (!IS_TOUCH && controlsActive && !autoTour.active) lockPointer(); }
+  endGuestbookEdit(true);
   if (gbReturnFocus && typeof gbReturnFocus.focus === 'function') gbReturnFocus.focus();
   gbReturnFocus = null;
 }
 
 gbMessage.addEventListener('input', () => { gbCount.textContent = `${gbMessage.value.length} / 500`; });
+gbCancel.addEventListener('click', () => {
+  endGuestbookEdit(true);
+  gbStatus.className = '';
+  gbStatus.textContent = '수정을 취소했습니다 · 編集をキャンセルしました';
+  gbName.focus();
+});
 
 guestbookForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2402,7 +2462,7 @@ guestbookForm.addEventListener('submit', async (e) => {
     gbStatus.textContent = '메시지를 입력해 주세요 · メッセージを入力してください';
     return;
   }
-  const wait = Social.postCooldownLeft();
+  const wait = gbEditingId ? 0 : Social.postCooldownLeft();
   if (wait > 0) {
     gbStatus.className = 'warn';
     gbStatus.textContent = `잠시 후 다시 시도해 주세요 (${Math.ceil(wait / 1000)}초) · 少し待ってから`;
@@ -2411,10 +2471,17 @@ guestbookForm.addEventListener('submit', async (e) => {
   gbSubmit.disabled = true;
   try {
     await Social.initSocial();
-    await Social.addGuestbookEntry({ name, school, message, badge });
-    gbMessage.value = ''; gbCount.textContent = '0 / 500';
-    gbStatus.className = '';
-    gbStatus.textContent = '남겨 주셔서 감사합니다 · ありがとうございました';
+    if (gbEditingId) {
+      await Social.updateGuestbookEntry(gbEditingId, { name, school, message, badge });
+      endGuestbookEdit(true);
+      gbStatus.className = '';
+      gbStatus.textContent = '수정되었습니다 · 変更を保存しました';
+    } else {
+      await Social.addGuestbookEntry({ name, school, message, badge });
+      gbMessage.value = ''; gbCount.textContent = '0 / 500';
+      gbStatus.className = '';
+      gbStatus.textContent = '남겨 주셔서 감사합니다 · ありがとうございました';
+    }
     // 로컬 모드는 실시간 스냅샷이 없으므로 목록을 즉시 다시 불러온다.
     if (Social.getMode() !== 'firebase') {
       if (gbUnsub) gbUnsub();
@@ -2422,9 +2489,13 @@ guestbookForm.addEventListener('submit', async (e) => {
     }
   } catch (err) {
     gbStatus.className = 'warn';
-    gbStatus.textContent = err.message === 'COOLDOWN'
-      ? '잠시 후 다시 시도해 주세요 · 少し待ってから'
-      : '저장에 실패했습니다 · 保存に失敗しました';
+    if (err.message === 'COOLDOWN') {
+      gbStatus.textContent = '잠시 후 다시 시도해 주세요 · 少し待ってから';
+    } else if (err.message === 'AUTH_REQUIRED' || err.code === 'permission-denied') {
+      gbStatus.textContent = '저장 권한 설정을 확인해 주세요 · 保存権限の設定を確認してください';
+    } else {
+      gbStatus.textContent = '저장에 실패했습니다 · 保存に失敗しました';
+    }
     console.warn('방명록 저장 실패', err);
   } finally {
     gbSubmit.disabled = false;

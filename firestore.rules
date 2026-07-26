@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function validGuestbook(data) {
+      return data.keys().hasOnly([
+               'name', 'school', 'message', 'createdAt', 'editedAt', 'badge', 'ownerId'
+             ])
+             && data.keys().hasAll(['name', 'school', 'message', 'createdAt'])
+             && data.name is string
+             && data.name.size() <= 40
+             && data.school is string
+             && data.school.size() <= 40
+             && data.message is string
+             && data.message.size() >= 1
+             && data.message.size() <= 500
+             && (!('badge' in data) || data.badge == 'secret')
+             && (!('ownerId' in data)
+                 || (data.ownerId is string && data.ownerId.size() > 0));
+    }
+
+    match /guestbook/{id} {
+      allow read: if true;
+
+      // 익명 인증이 아직 켜지지 않은 배포에서도 작성은 유지하되,
+      // ownerId가 있는 새 글만 브라우저 소유 글로 인정한다.
+      allow create: if validGuestbook(request.resource.data)
+                    && request.resource.data.createdAt == request.time
+                    && !('editedAt' in request.resource.data)
+                    && (!('ownerId' in request.resource.data)
+                        || (request.auth != null
+                            && request.resource.data.ownerId == request.auth.uid));
+
+      allow update: if request.auth != null
+                    && resource.data.ownerId == request.auth.uid
+                    && request.resource.data.ownerId == resource.data.ownerId
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.editedAt == request.time
+                    && validGuestbook(request.resource.data)
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['name', 'school', 'message', 'badge', 'editedAt']);
+
+      allow delete: if false;
+    }
+  }
+}

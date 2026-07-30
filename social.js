@@ -134,7 +134,7 @@ export function watchGuestbook(cb) {
 }
 
 // 방명록 작성. 성공 시 저장된 엔트리 형태 반환.
-// badge: 'secret' 이면 "기네스북"(비밀의 방 도전 성공자) 뱃지를 함께 저장한다.
+// badge: 'secret' 이면 비밀의 방 도전 성공자 뱃지를 함께 저장한다.
 export async function addGuestbookEntry({ name, school, message, badge }) {
   const clean = cleanEntry({ name, school, message });
   if (postCooldownLeft() > 0) throw new Error('COOLDOWN');

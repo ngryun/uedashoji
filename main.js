@@ -2337,7 +2337,7 @@ function renderGuestbook(entries) {
     name.textContent = e.name || '익명 · 匿名'; head.appendChild(name);
     if (e.badge === 'secret') {
       const badge = document.createElement('span'); badge.className = 'gbBadge';
-      badge.textContent = '🏆 기네스북 · クリア'; head.appendChild(badge);
+      badge.textContent = '🏆 다이센과 설악산의 축복을 받은자'; head.appendChild(badge);
     }
     if (e.school) {
       const sc = document.createElement('span'); sc.className = 'gbEntrySchool';

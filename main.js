@@ -1386,7 +1386,8 @@ function buildMuseum(manifest) {
     const openings = stairways.map(stairOpening);
     const rects = defs[0].floor === 0
       ? [[-12, 12, fullZMin, fullZMax]]
-      : rectsAroundOpenings(-12, 12, fullZMin, fullZMax, openings);
+      // 동쪽 유리벽 밖으로 슬래브가 튀어나와 2층의 수면 전망을 가리지 않게 한다.
+      : rectsAroundOpenings(-12, 8.4, fullZMin, fullZMax, openings);
     const slabMat = defs[0].floor === 1 ? concreteMat(6, totalL / 4) : null;
     for (const [x1, x2, z1, z2] of rects) {
       const width = x2 - x1, depth = z2 - z1;

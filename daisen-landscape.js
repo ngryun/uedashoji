@@ -2,11 +2,11 @@ import * as THREE from './lib/three.module.js';
 
 // 원본의 윗부분 56%만 배경으로 읽는다. 산의 비율을 유지하고 하단 표지판은 제외한다.
 export const DAISEN_VIEW = Object.freeze({ cropBottom: 0.44, cropHeight: 0.56,
-  horizontalAngle: Math.PI * 0.42, imageAspect: 2048 / 1536, centerU: 0.56, horizon: -0.015 });
+  horizontalAngle: Math.PI * 0.60, imageAspect: 2048 / 1536, centerU: 0.56, horizon: -0.015 });
 
 export function terrainHeight(x, z) {
   const bank = Math.min(1, Math.max(0, (x - 27) / 7));
-  return 0.035 + bank * (0.16 + Math.exp(-((x - 43) / 18) ** 2)
+  return 0.035 + bank * (0.16 + Math.exp(-(((x - 43) / 18) ** 2))
     * (0.7 + 0.16 * Math.sin(z * 0.12) + 0.12 * Math.sin(z * 0.29 + x * 0.1)));
 }
 
@@ -24,18 +24,32 @@ const landscapeGLSL = `
     float u = atan(ray.z, ray.x) / span + ${DAISEN_VIEW.centerU};
     float v = (elevation - ${DAISEN_VIEW.horizon}) / verticalScale;
     vec3 sky = mix(horizonColor, skyColor, smoothstep(0.0, 0.85, elevation));
-    float edges = smoothstep(0.0, 0.075, u) * (1.0 - smoothstep(0.925, 1.0, u));
-    float heightBlend = smoothstep(-0.03, 0.035, v) * (1.0 - smoothstep(0.91, 1.0, v));
-    vec2 uv = vec2(clamp(u, 0.001, 0.999), ${DAISEN_VIEW.cropBottom} + clamp(v, 0.0, 1.0) * ${DAISEN_VIEW.cropHeight});
+    // 중앙 사진은 그대로 유지하고 양끝의 낮은 능선·하늘만 바깥으로 이어 준다.
+    float extendedU = u < 0.0 ? min(-u, 0.16) : (u > 1.0 ? max(1.0 - (u - 1.0), 0.84) : u);
+    float heightBlend = 1.0 - smoothstep(0.91, 1.0, v);
+    vec2 uv = vec2(clamp(extendedU, 0.001, 0.999), ${DAISEN_VIEW.cropBottom} + clamp(v, 0.0, 1.0) * ${DAISEN_VIEW.cropHeight});
     vec3 photo = texture2D(backdrop, uv).rgb;
     // 사진 자체의 구름과 명암을 살리고 지평선 근처에만 옅은 대기감을 더한다.
     photo = mix(photo, horizonColor, 0.055 + 0.08 * (1.0 - smoothstep(0.0, 0.35, v)));
-    return mix(sky, photo, edges * heightBlend * imageReady);
+    return mix(sky, photo, heightBlend * imageReady);
   }
 `;
 
 function randomSource(seed) {
   return () => { seed = (Math.imul(seed, 1664525) + 1013904223) | 0; return (seed >>> 0) / 4294967296; };
+}
+
+function groundTexture() {
+  const image = document.createElement('canvas'); image.width = image.height = 256;
+  const ctx = image.getContext('2d'), random = randomSource(714);
+  ctx.fillStyle = '#eeeeea'; ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 8000; i++) {
+    ctx.fillStyle = `rgba(90,88,58,${0.04 + random() * 0.18})`;
+    ctx.fillRect(random() * 256, random() * 256, 0.5 + random(), 1 + random() * 3);
+  }
+  const map = new THREE.CanvasTexture(image); map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = map.wrapT = THREE.RepeatWrapping; map.anisotropy = 4;
+  return map;
 }
 
 export function createDaisenLandscape({ scene, camera, zEnd, mobile }) {
@@ -73,8 +87,8 @@ export function createDaisenLandscape({ scene, camera, zEnd, mobile }) {
     fragmentShader: `varying vec3 worldPoint; uniform float time; ${landscapeGLSL}
       void main() {
         vec3 normal = normalize(vec3(
-          0.012 * sin(worldPoint.x * 3.8 + worldPoint.z * 1.7 + time * 0.6),
-          1.0, 0.009 * sin(worldPoint.z * 5.1 - worldPoint.x * 1.3 - time * 0.45)));
+          0.0035 * sin(worldPoint.x * 3.8 + worldPoint.z * 1.7 + time * 0.6),
+          1.0, 0.0025 * sin(worldPoint.z * 5.1 - worldPoint.x * 1.3 - time * 0.45)));
         vec3 incident = normalize(worldPoint - cameraPosition);
         vec3 reflected = reflect(incident, normal);
         vec3 reflection = landscape(reflected);
@@ -101,21 +115,23 @@ export function createDaisenLandscape({ scene, camera, zEnd, mobile }) {
     curb.position.set(18.2, 0.04, z); group.add(curb);
   }
 
-  const landMinZ = zEnd - 130, landMaxZ = 145;
-  const ground = new THREE.PlaneGeometry(253, landMaxZ - landMinZ, mobile ? 36 : 64, mobile ? 48 : 80);
-  ground.rotateX(-Math.PI / 2); ground.translate((27 + 280) / 2, 0, (landMinZ + landMaxZ) / 2);
+  const landMinZ = zEnd - 400, landMaxZ = 400;
+  const ground = new THREE.PlaneGeometry(473, landMaxZ - landMinZ, mobile ? 48 : 80, mobile ? 64 : 96);
+  ground.rotateX(-Math.PI / 2); ground.translate((27 + 500) / 2, 0, (landMinZ + landMaxZ) / 2);
   const pos = ground.attributes.position, colors = [];
-  const nearColor = new THREE.Color(0x7c805d), farColor = new THREE.Color(0xa1ada4), color = new THREE.Color();
+  const uv = ground.attributes.uv;
+  const nearColor = new THREE.Color(0x676d4e), farColor = new THREE.Color(0x737b68), color = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
     pos.setY(i, terrainHeight(x, z));
+    uv.setXY(i, x / 7, z / 7);
     const haze = Math.min(0.75, (x - 27) / 270);
     color.copy(nearColor).lerp(farColor, haze);
     color.multiplyScalar(0.94 + 0.045 * Math.sin(z * 0.7 + x * 0.2) + 0.035 * Math.cos(z * 0.17 - x * 0.55));
     colors.push(color.r, color.g, color.b);
   }
   ground.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); ground.computeVertexNormals();
-  const land = new THREE.Mesh(ground, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, envMapIntensity: 0.45 }));
+  const land = new THREE.Mesh(ground, new THREE.MeshStandardMaterial({ map: groundTexture(), vertexColors: true, roughness: 1, envMapIntensity: 0.45, fog: false }));
   land.name = 'daisen-low-bank'; group.add(land);
 
   // 낮은 풀 군락은 한 번에 렌더링한다. 개별 메시와 투명 텍스처를 늘리지 않는다.

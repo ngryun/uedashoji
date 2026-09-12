@@ -4,8 +4,10 @@ import * as THREE from 'three';
 import * as Social from './social.js';
 import { SECRET_QUIZ, REWARD_VIDEO } from './quiz-data.js';
 import { createGuestbookScreen } from './guestbook-screen.js';
+import { createLobbyFinish } from './lobby-atmosphere.js';
 
 let guestbookScreen = null;
+let lobbyAtmosphere = null;
 let screenWatchStarted = false;
 function startScreenWatch() {
   if (!guestbookScreen || screenWatchStarted) return;
@@ -1407,6 +1409,7 @@ function buildMuseum(manifest) {
 
   for (const stair of stairways) buildStaircase(stair);
 
+  let lobbyFinish = null;
   for (const def of roomDefs) {
     const { W, L, zFrom, zTo } = def;
     const yBase = def.elevation;
@@ -1416,9 +1419,12 @@ function buildMuseum(manifest) {
     def.group = roomGroup;
 
     const isCinema = def.type === 'cinema';
+    const isEntrance = def.type === 'lobby' && !def.upper;
     // 1층의 각 방 천장에는 겹치는 계단실 개구부를 남긴다. 시어터는 어두운 천장.
-    const ceilMat = new THREE.MeshBasicMaterial({
-      color: isCinema ? 0x14151a : 0xdedcd7, side: THREE.BackSide });
+    const ceilMat = isEntrance
+      ? new THREE.MeshStandardMaterial({ color: 0xc7c4bb, roughness: 0.95,
+        side: THREE.BackSide, envMapIntensity: 0.6, emissive: 0x948b7b, emissiveIntensity: 0.12 })
+      : new THREE.MeshBasicMaterial({ color: isCinema ? 0x14151a : 0xdedcd7, side: THREE.BackSide });
     const xEdge = W / 2 + T;
     const ceilingOpenings = def.floor === 0 ? stairways.map(stairOpening) : [];
     const ceilingRects = rectsAroundOpenings(-xEdge, xEdge, zTo, zFrom, ceilingOpenings);
@@ -1430,11 +1436,13 @@ function buildMuseum(manifest) {
     }
     if (!isCinema) {
       // 천장 조명 스트립 (자체발광)
-      const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.8, L - 2),
-        new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }));
+      const strip = new THREE.Mesh(new THREE.PlaneGeometry(isEntrance ? 0.22 : 0.8, L - 2),
+        new THREE.MeshBasicMaterial({ color: isEntrance ? 0xfff1da : 0xffffff, toneMapped: false }));
       strip.rotation.x = Math.PI / 2; strip.position.set(0, yBase + WALL_H - 0.05, cz);
       scene.add(strip);
-      const glow = new THREE.Mesh(new THREE.PlaneGeometry(4.5, L - 2), glowMat);
+      const stripGlow = isEntrance ? glowMat.clone() : glowMat;
+      if (stripGlow !== glowMat) stripGlow.opacity = 0.22;
+      const glow = new THREE.Mesh(new THREE.PlaneGeometry(4.5, L - 2), stripGlow);
       glow.rotation.x = Math.PI / 2; glow.position.set(0, yBase + WALL_H - 0.28, cz);
       glow.renderOrder = 3; scene.add(glow);
     }
@@ -1442,15 +1450,25 @@ function buildMuseum(manifest) {
     if (def.type === 'cinema') {
       buildCinema(def, roomGroup);
     } else if (def.type === 'lobby') {
+      const finish = def.upper ? null : createLobbyFinish({ sun: sun.position,
+        stair: PRIMARY_STAIR, mobile: IS_TOUCH });
+      const lobbyConcrete = (width, height) => finish
+        ? finish.concreteMaterial(width, height) : concreteMat(width / 4, height / 4);
+      if (finish) {
+        lobbyFinish = finish;
+        lobbyAtmosphere = finish.group;
+        scene.add(lobbyAtmosphere);
+        finish.addColliders(addCollider);
+      }
       // 서쪽 벽(타이틀) — 양끝을 남쪽 벽/칸막이 속으로 살짝 밀어넣어 동일 평면 회피
       wallBox(-W / 2 - T / 2, yBase + WALL_H / 2, cz, T, WALL_H, L + 0.2,
-        concreteMat(L / 4, WALL_H / 4), true, def.floor);
+        lobbyConcrete(L, WALL_H), true, def.floor);
       // 남쪽 벽
       wallBox(0, yBase + WALL_H / 2, zFrom + T / 2, W + T * 2, WALL_H, T,
-        concreteMat(W / 4, WALL_H / 4), true, def.floor);
+        lobbyConcrete(W, WALL_H), true, def.floor);
       // 동쪽: 유리벽 (하단 60cm 콘크리트 + 유리)
       wallBox(W / 2 + T / 2, yBase + 0.3, cz, T, 0.6, L + 0.2,
-        concreteMat(L / 4, 0.5), false, def.floor);
+        lobbyConcrete(L, 2), false, def.floor);
       const glass = new THREE.Mesh(new THREE.BoxGeometry(0.06, WALL_H - 0.6, L + 0.2),
         new THREE.MeshPhysicalMaterial({ color: 0xdfeef2, transparent: true, opacity: 0.14,
           roughness: 0.05, metalness: 0, side: THREE.DoubleSide }));
@@ -1722,7 +1740,9 @@ function buildMuseum(manifest) {
       const z = defs[i].zFrom;
       const w = Math.max(defs[i - 1].W, defs[i].W);
       dividerWall(z, -w / 2 - T, w / 2 + T,
-        concreteMat(w / 6, WALL_H / 4), defs[i].floor, defs[i].elevation);
+        i === 1 && defs[i].floor === 0 && lobbyFinish
+          ? lobbyFinish.concreteMaterial((w - DOOR_W) / 2, WALL_H)
+          : concreteMat(w / 6, WALL_H / 4), defs[i].floor, defs[i].elevation);
     }
     const last = defs[defs.length - 1];
     wallBox(0, last.elevation + WALL_H / 2, last.zTo - T / 2,
@@ -2763,6 +2783,7 @@ let lastRoomCheck = 0;
 function updateRooms(now) {
   if (now - lastRoomCheck < 400) return;
   lastRoomCheck = now;
+  if (lobbyAtmosphere) lobbyAtmosphere.visible = player.floor === 0 && player.pos.z > -10;
   currentRoomIdx = roomIndexAt(player.pos.z, player.floor);
   roomLabelEl.textContent = rooms[currentRoomIdx] ? rooms[currentRoomIdx].label : '';
 

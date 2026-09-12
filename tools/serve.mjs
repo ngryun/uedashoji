@@ -58,6 +58,7 @@ http.createServer((req, res) => {
   const isPublicPath = pathname === '/index.html' || pathname === '/main.js'
     || pathname === '/social.js' || pathname === '/firebase-config.js'
     || pathname === '/guestbook-screen.js'
+    || pathname === '/lobby-atmosphere.js'
     || pathname === '/quiz-data.js' || pathname === '/manifest.json'
     || pathname.startsWith('/lib/')
     || (pathname.startsWith('/assets/') && !pathname.startsWith('/assets/.source-map/'));

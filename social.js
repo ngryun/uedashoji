@@ -13,6 +13,18 @@ const LS_OWNER = 'guest.owner.v1';         // 로컬 모드 브라우저별 작�
 let mode = 'local';   // 'firebase' | 'local'
 let fb = null;        // Firestore 모듈 + db
 let initPromise = null;
+let memoryOwnerId = null;
+let lastPostInMemory = 0;
+const localWatchers = new Set();
+
+function notifyLocalWatchers() {
+  for (const notify of localWatchers) {
+    try { notify(); } catch (err) { console.warn('[social] 로컬 방명록 표시 실패', err); }
+  }
+}
+globalThis.addEventListener?.('storage', event => {
+  if (event.key === LS_GUEST || event.key === null) notifyLocalWatchers();
+});
 
 export function getMode() { return mode; }
 
@@ -65,16 +77,19 @@ function readJSON(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
 }
 function writeJSON(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+  localStorage.setItem(key, JSON.stringify(val));
+  if (key === LS_GUEST) notifyLocalWatchers();
 }
 
 function localOwnerId() {
-  let id = localStorage.getItem(LS_OWNER);
-  if (id) return id;
+  if (memoryOwnerId) return memoryOwnerId;
+  let id;
+  try { id = localStorage.getItem(LS_OWNER); } catch {}
+  if (id) return (memoryOwnerId = id);
   id = globalThis.crypto?.randomUUID?.()
     || `browser-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   try { localStorage.setItem(LS_OWNER, id); } catch {}
-  return id;
+  return (memoryOwnerId = id);
 }
 
 function ownerId() {
@@ -89,7 +104,11 @@ export function canEditOwnEntries() {
 const NAME_MAX = 40, MSG_MAX = 500, POST_COOLDOWN_MS = 20000;
 
 export function postCooldownLeft() {
-  const last = Number(localStorage.getItem(LS_LASTPOST) || 0);
+  let last = lastPostInMemory;
+  try {
+    const stored = Number(localStorage.getItem(LS_LASTPOST) || 0);
+    if (Number.isFinite(stored)) last = Math.max(last, stored);
+  } catch {}
   return Math.max(0, POST_COOLDOWN_MS - (Date.now() - last));
 }
 
@@ -118,7 +137,7 @@ function publicEntry(id, value) {
 }
 
 // 실시간 방명록 구독. 최신순 목록과 현재 브라우저의 수정 가능 여부를 반환한다.
-export function watchGuestbook(cb) {
+export function watchGuestbook(cb, onError = null) {
   if (mode === 'firebase') {
     const q = fb.query(fb.collection(fb.db, 'guestbook'),
       fb.orderBy('createdAt', 'desc'), fb.limit(200));
@@ -126,11 +145,14 @@ export function watchGuestbook(cb) {
       (snap) => cb(snap.docs.map((d) => publicEntry(d.id, d.data()))),
       (err) => {
         console.warn('[social] 방명록 구독 오류', err);
+        if (onError) { onError(err); return; }
         cb(readJSON(LS_GUEST, []).map((entry) => publicEntry(entry.id, entry)));
       });
   }
-  cb(readJSON(LS_GUEST, []).map((entry) => publicEntry(entry.id, entry)));
-  return () => {};
+  const notify = () => cb(readJSON(LS_GUEST, []).map((entry) => publicEntry(entry.id, entry)));
+  localWatchers.add(notify);
+  notify();
+  return () => localWatchers.delete(notify);
 }
 
 // 방명록 작성. 성공 시 저장된 엔트리 형태 반환.
@@ -161,7 +183,9 @@ export async function addGuestbookEntry({ name, school, message, badge }) {
     writeJSON(LS_GUEST, list.slice(0, 200));
     id = entry.id;
   }
-  localStorage.setItem(LS_LASTPOST, String(Date.now()));
+  lastPostInMemory = Date.now();
+  // 도배 방지 시각을 기록하지 못해도 이미 완료한 저장을 실패로 알리지 않는다.
+  try { localStorage.setItem(LS_LASTPOST, String(lastPostInMemory)); } catch {}
   return {
     id,
     ...clean,

@@ -3,6 +3,22 @@
 import * as THREE from 'three';
 import * as Social from './social.js';
 import { SECRET_QUIZ, REWARD_VIDEO } from './quiz-data.js';
+import { createGuestbookScreen } from './guestbook-screen.js';
+
+let guestbookScreen = null;
+let screenWatchStarted = false;
+function startScreenWatch() {
+  if (!guestbookScreen || screenWatchStarted) return;
+  screenWatchStarted = true;
+  Social.initSocial().then(() => {
+    Social.watchGuestbook(entries => guestbookScreen.setEntries(entries, Social.getMode()),
+      () => guestbookScreen.setError());
+  }).catch(err => {
+    screenWatchStarted = false;
+    guestbookScreen.setError();
+    console.warn('방명록 스크린 연결 실패', err);
+  });
+}
 
 /* ═══════════════════ 상수 ═══════════════════ */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0
@@ -73,13 +89,20 @@ const biDay = (label) => label.replace(/\(([일월화수목금토])\)/, (_, d) =
 
 /* ═══════════════════ 기본 셋업 ═══════════════════ */
 const app = document.getElementById('app');
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, IS_TOUCH ? 1.7 : 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.12;
-app.appendChild(renderer.domElement);
+let renderer = null;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, IS_TOUCH ? 1.7 : 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.12;
+  app.appendChild(renderer.domElement);
+} catch (err) {
+  renderer?.dispose();
+  renderer = null;
+  console.warn('3D 초기화 실패 — 2D 목록을 이용할 수 있습니다.', err);
+}
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xdfe3e8);
@@ -95,6 +118,7 @@ scene.add(sun);
 
 // 실내 환경맵 (반사·간접광 느낌) — 간단한 등장방형 캔버스 → PMREM
 (function setupEnvironment() {
+  if (!renderer) return;
   const c = document.createElement('canvas'); c.width = 256; c.height = 128;
   const g = c.getContext('2d');
   const grad = g.createLinearGradient(0, 0, 0, 128);
@@ -116,7 +140,7 @@ scene.add(sun);
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer?.setSize(window.innerWidth, window.innerHeight);
 });
 
 /* ═══════════════════ 프로시저럴 텍스처 (콘크리트/바닥) ═══════════════════ */
@@ -1480,6 +1504,8 @@ function buildMuseum(manifest) {
 
         // 마스코트 입간판 — 입장하는 관람객을 맞이하도록 로비에 세운다.
         buildStandee(-3.4, zFrom - 7, def.floor, 1, zFrom - 2.5, 1.5);
+        guestbookScreen = createGuestbookScreen();
+        scene.add(guestbookScreen.group);
       }
 
       floorSpawnPoints[def.floor] = new THREE.Vector3(0, yBase + EYE, zFrom - 3);
@@ -1754,6 +1780,7 @@ let controlsActive = false;
 const AUTO_CANCEL_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD',
   'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
 document.addEventListener('keydown', (e) => {
+  if (!controlsActive || viewerOpen || e.target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
   if (!e.repeat && controlsActive && !viewerOpen && (e.code === 'Digit1' || e.code === 'Digit2')) {
@@ -1768,6 +1795,9 @@ document.addEventListener('keydown', (e) => {
   }
 });
 document.addEventListener('keyup', (e) => { keys[e.code] = false; });
+window.addEventListener('blur', () => {
+  for (const code of Object.keys(keys)) delete keys[code];
+});
 
 /* 데스크톱: 포인터 락 */
 const startEl = document.getElementById('start');
@@ -1845,10 +1875,10 @@ function lockPointer() {
 
 let wasLocked = false;
 document.addEventListener('pointerlockchange', () => {
-  const locked = document.pointerLockElement === renderer.domElement;
+  const locked = Boolean(renderer && document.pointerLockElement === renderer.domElement);
   if (!IS_TOUCH) {
     if (locked) { controlsActive = true; wasLocked = true; }
-    else if (wasLocked && !viewerOpen && !quizOpen && !autoTour.active) {
+    else if (wasLocked && controlsActive && !viewerOpen && !quizOpen && !autoTour.active) {
       // 락 해제(ESC) → 시작 화면으로 (자동 관람 중에는 락 없이 계속 관람)
       controlsActive = false;
       startEl.classList.remove('hidden');
@@ -1861,14 +1891,14 @@ document.addEventListener('pointerlockchange', () => {
   }
 });
 document.addEventListener('mousemove', (e) => {
-  if (document.pointerLockElement !== renderer.domElement) return;
+  if (!renderer || document.pointerLockElement !== renderer.domElement) return;
   player.yaw -= e.movementX * 0.0022;
   player.pitch -= e.movementY * 0.0022;
   player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch));
 });
 /* 포인터 락이 안 되는 환경 폴백: 드래그로 시점 회전 */
 const drag = { on: false, x: 0, y: 0, moved: 0 };
-renderer.domElement.addEventListener('mousedown', (e) => {
+renderer?.domElement.addEventListener('mousedown', (e) => {
   if (IS_TOUCH || document.pointerLockElement || !controlsActive) return;
   drag.on = true; drag.x = e.clientX; drag.y = e.clientY; drag.moved = 0;
 });
@@ -1911,7 +1941,7 @@ if (IS_TOUCH) {
     btnRun.setAttribute('aria-pressed', String(player.running));
   });
 
-  renderer.domElement.addEventListener('touchstart', (e) => {
+  renderer?.domElement.addEventListener('touchstart', (e) => {
     if (!controlsActive) return;
     for (const t of e.changedTouches) {
       if (t.clientX < window.innerWidth * 0.45 && t.clientY > window.innerHeight * 0.35 && !joy.active) {
@@ -1932,7 +1962,7 @@ if (IS_TOUCH) {
     }
   }, { passive: true });
 
-  renderer.domElement.addEventListener('touchmove', (e) => {
+  renderer?.domElement.addEventListener('touchmove', (e) => {
     for (const t of e.changedTouches) {
       if (joy.active && t.identifier === joy.id) {
         let dx = t.clientX - joy.cx, dy = t.clientY - joy.cy;
@@ -1967,8 +1997,8 @@ if (IS_TOUCH) {
       }
     }
   };
-  renderer.domElement.addEventListener('touchend', endTouch, { passive: true });
-  renderer.domElement.addEventListener('touchcancel', endTouch, { passive: true });
+  renderer?.domElement.addEventListener('touchend', endTouch, { passive: true });
+  renderer?.domElement.addEventListener('touchcancel', endTouch, { passive: true });
 }
 
 /* ═══════════════════ 배경 음악 ═══════════════════ */
@@ -2125,6 +2155,7 @@ autoBtn.addEventListener('click', (e) => {
 
 /* 입장 버튼 */
 function enterMuseum(auto = false) {
+  startScreenWatch();
   startBgm(); // 사용자 제스처 시점이라 자동재생 정책에 걸리지 않는다.
   document.body.classList.add('playing');
   startEl.classList.add('hidden');
@@ -2272,7 +2303,13 @@ function build2DGallery(manifest) {
     galleryFilters.appendChild(button);
   }
 
-  for (const art of artworks) {
+  // 3D 생성 결과와 독립적으로 목록을 만들어 WebGL이 없어도 사용할 수 있다.
+  const dayCounts = new Map();
+  for (const item of manifest.items) {
+    const idxInDay = (dayCounts.get(item.day) || 0) + 1;
+    dayCounts.set(item.day, idxInDay);
+    const art = { item, idxInDay, isVideo: item.type === 'video',
+      dayLabel: biDay(manifest.days[item.day - 1]) };
     const itemWrap = document.createElement('div');
     itemWrap.setAttribute('role', 'listitem');
     itemWrap.dataset.day = String(art.item.day);
@@ -2412,6 +2449,7 @@ async function openGuestbook() {
   if (gbFromStart) { startEl.setAttribute('aria-hidden', 'true'); startEl.inert = true; }
   touchUIEl.setAttribute('aria-hidden', 'true');
   setGuestbookBadgeOption(false, hasSecretClear());
+  touchUIEl.inert = true;
   guestbookPanel.hidden = false;
   guestbookPanel.setAttribute('aria-hidden', 'false');
   if (gbUnsub) { gbUnsub(); gbUnsub = null; }
@@ -2438,6 +2476,8 @@ function closeGuestbook() {
   guestbookPanel.setAttribute('aria-hidden', 'true');
   if (gbFromStart) { startEl.setAttribute('aria-hidden', 'false'); startEl.inert = false; }
   else { controlsActive = gbControlsBefore; if (!IS_TOUCH && controlsActive && !autoTour.active) lockPointer(); }
+  touchUIEl.inert = !controlsActive;
+  touchUIEl.setAttribute('aria-hidden', String(!IS_TOUCH || !controlsActive));
   endGuestbookEdit(true);
   if (gbReturnFocus && typeof gbReturnFocus.focus === 'function') gbReturnFocus.focus();
   gbReturnFocus = null;
@@ -2481,11 +2521,6 @@ guestbookForm.addEventListener('submit', async (e) => {
       gbMessage.value = ''; gbCount.textContent = '0 / 500';
       gbStatus.className = '';
       gbStatus.textContent = '남겨 주셔서 감사합니다 · ありがとうございました';
-    }
-    // 로컬 모드는 실시간 스냅샷이 없으므로 목록을 즉시 다시 불러온다.
-    if (Social.getMode() !== 'firebase') {
-      if (gbUnsub) gbUnsub();
-      gbUnsub = Social.watchGuestbook(renderGuestbook);
     }
   } catch (err) {
     gbStatus.className = 'warn';
@@ -2677,10 +2712,6 @@ secretForm.addEventListener('submit', async (e) => {
     sfMessage.value = ''; sfCount.textContent = '0 / 500';
     secretStatus.className = '';
     secretStatus.textContent = '기네스북에 기록되었습니다! · 記帳しました！';
-    // 로컬 모드는 실시간 스냅샷이 없으므로 명예의 전당을 즉시 다시 그린다.
-    if (Social.getMode() !== 'firebase') {
-      Social.watchGuestbook((entries) => renderHallOfFame(entries.filter((x) => x.badge === 'secret')));
-    }
   } catch (err) {
     secretStatus.className = 'warn';
     secretStatus.textContent = err.message === 'COOLDOWN'
@@ -2701,10 +2732,12 @@ function tryViewAt(sx, sy) {
   const meshes = [];
   for (const a of artworks) if (a.group.parent && a.pos.distanceTo(player.pos) < 8) meshes.push(a.plane);
   if (secretProjectionCtl?.canInteract()) meshes.push(secretProjectionCtl.plane);
+  if (guestbookScreen && player.floor === 0) meshes.push(guestbookScreen.plane);
   const hits = raycaster.intersectObjects(meshes, false);
-  if (hits.length) openViewer(hits[0].object.userData.art);
+  if (hits[0]?.object === guestbookScreen?.plane) openGuestbook();
+  else if (hits.length) openViewer(hits[0].object.userData.art);
 }
-renderer.domElement.addEventListener('click', () => {
+renderer?.domElement.addEventListener('click', () => {
   if (!IS_TOUCH && document.pointerLockElement === renderer.domElement) {
     tryViewAt(window.innerWidth / 2, window.innerHeight / 2);
   }
@@ -2964,8 +2997,13 @@ async function init() {
     const res = await fetch('manifest.json');
     if (!res.ok) throw new Error('manifest.json not found');
     const manifest = await res.json();
-    buildMuseum(manifest);
     build2DGallery(manifest);
+    galleryBtn.disabled = false;
+    if (!renderer) {
+      loadNote.textContent = '3D를 사용할 수 없습니다. 2D 사진 목록과 방명록을 이용해 주세요 · 3Dを利用できません。写真リストとゲストブックをご利用ください';
+      return;
+    }
+    buildMuseum(manifest);
     // 시각 검수용: ?preview=video, day2-stair, secret-projection으로 시작 위치를 바꾼다.
     const preview = new URLSearchParams(location.search).get('preview');
     if (preview === 'video') {
@@ -3007,6 +3045,7 @@ async function init() {
     autoEnterBtn.disabled = false;
     lastRoomCheck = -1e9;
     updateRooms(performance.now()); // 초기 로딩 킥
+    loop();
   } catch (err) {
     loadNote.textContent = '전시 준비 중입니다 — 새로고침해 주세요 · 展示準備中です — 再読み込みしてください (' + err.message + ')';
     console.error(err);
@@ -3023,17 +3062,18 @@ function loop() {
   updateBgm(dt);
   if (cinemaCtl) cinemaCtl.update(dt);
   if (secretProjectionCtl) secretProjectionCtl.update();
+  guestbookScreen?.update(dt, player, controlsActive && !viewerOpen);
   renderer.render(scene, camera);
 }
 
 init();
-loop();
 
 // 개발용 디버그 핸들
 window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera,
   tourStops, autoTour, startAutoTour, stopAutoTour,
   challenge,
   get cinema() { return cinemaCtl; },
+  get guestbookScreen() { return guestbookScreen; },
   get secretProjection() { return secretProjectionCtl; },
   get room() { return currentRoomIdx; },
   tp(x, z, yaw) { player.pos.set(x, EYE + player.floor * FLOOR_HEIGHT, z); player.yaw = yaw; player.pitch = 0; },

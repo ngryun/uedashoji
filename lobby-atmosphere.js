@@ -125,13 +125,13 @@ function sunlightTexture(sun, stair, mobile) {
     if (edge <= 0) continue;
     const mullionDistance = Math.abs(windowZ - Math.round(windowZ / 3.5) * 3.5);
     if (mullionDistance < 0.07 || blockers.some(box => intersectsSunRay(x, z, box, dx, dz))) continue;
-    pixels.data[offset] = 255; pixels.data[offset + 1] = 240; pixels.data[offset + 2] = 207;
-    pixels.data[offset + 3] = Math.round(115 * Math.min(1, edge / 0.14));
+    pixels.data[offset] = 249; pixels.data[offset + 1] = 245; pixels.data[offset + 2] = 231;
+    pixels.data[offset + 3] = Math.round(85 * Math.min(1, edge / 0.14));
   }
   g.putImageData(pixels, 0, 0);
   // 픽셀 경계와 창틀 그림자를 아주 조금 부드럽게 한다.
   const [soft, s] = canvas(width, height);
-  s.filter = 'blur(1px)'; s.drawImage(image, 0, 0);
+  s.filter = 'blur(1.8px)'; s.drawImage(image, 0, 0);
   const tex = texture(soft, true); tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   return tex;
 }

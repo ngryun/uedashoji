@@ -5,9 +5,11 @@ import * as Social from './social.js';
 import { SECRET_QUIZ, REWARD_VIDEO } from './quiz-data.js';
 import { createGuestbookScreen } from './guestbook-screen.js';
 import { createLobbyFinish } from './lobby-atmosphere.js';
+import { createDaisenLandscape } from './daisen-landscape.js';
 
 let guestbookScreen = null;
 let lobbyAtmosphere = null;
+let daisenLandscape = null;
 let screenWatchStarted = false;
 function startScreenWatch() {
   if (!guestbookScreen || screenWatchStarted) return;
@@ -116,6 +118,7 @@ camera.rotation.order = 'YXZ';
 scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8a80, 0.75));
 const sun = new THREE.DirectionalLight(0xfff4e0, 0.7);
 sun.position.set(40, 60, 30);
+sun.color.setHex(0xfff9f0);
 scene.add(sun);
 
 // 실내 환경맵 (반사·간접광 느낌) — 간단한 등장방형 캔버스 → PMREM
@@ -1499,26 +1502,8 @@ function buildMuseum(manifest) {
       scene.add(title);
 
       if (!def.upper) {
-        // 외부: 수면 (미술관 앞 수면 오마주)
-        const water = new THREE.Mesh(new THREE.PlaneGeometry(26, L + 6),
-          new THREE.MeshStandardMaterial({ color: 0xb9d3da, roughness: 0.04, metalness: 0.85, envMapIntensity: 1.3 }));
-        water.rotation.x = -Math.PI / 2;
-        water.position.set(W / 2 + 14, 0.06, cz);
-        scene.add(water);
-
-        // 외부: 다이센 배경 사진 — 로비와 Day 2 창 모두에서 이어져 보이도록
-        // 1층 동쪽 전체(로비~Day 2 남단)를 한 장으로 덮는다. 가로만 늘려 이음매를 없앤다.
-        new THREE.TextureLoader().load('assets/backdrop.jpg', (t) => {
-          t.colorSpace = THREE.SRGBColorSpace;
-          // 유리벽에 바짝 붙어 비스듬히 볼 때도 끝이 드러나지 않게 남북으로 크게 연장한다.
-          const zEnd0 = floorDefs[0][floorDefs[0].length - 1].zTo;
-          const bpN = zEnd0 - 60, bpS = 30;
-          const bp = new THREE.Mesh(new THREE.PlaneGeometry(bpS - bpN, 63),
-            new THREE.MeshBasicMaterial({ map: t, fog: true, toneMapped: false }));
-          bp.position.set(W / 2 + 58, 2.4, (bpS + bpN) / 2);
-          bp.rotation.y = -Math.PI / 2;
-          scene.add(bp);
-        });
+        daisenLandscape = createDaisenLandscape({ scene, camera,
+          zEnd: floorDefs[0][floorDefs[0].length - 1].zTo, mobile: IS_TOUCH });
 
         // 마스코트 입간판 — 입장하는 관람객을 맞이하도록 로비에 세운다.
         buildStandee(-3.4, zFrom - 7, def.floor, 1, zFrom - 2.5, 1.5);
@@ -3084,6 +3069,7 @@ function loop() {
   if (cinemaCtl) cinemaCtl.update(dt);
   if (secretProjectionCtl) secretProjectionCtl.update();
   guestbookScreen?.update(dt, player, controlsActive && !viewerOpen);
+  daisenLandscape?.update(dt, controlsActive);
   renderer.render(scene, camera);
 }
 
@@ -3094,6 +3080,7 @@ window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera
   tourStops, autoTour, startAutoTour, stopAutoTour,
   challenge,
   get cinema() { return cinemaCtl; },
+  get landscape() { return daisenLandscape; },
   get guestbookScreen() { return guestbookScreen; },
   get secretProjection() { return secretProjectionCtl; },
   get room() { return currentRoomIdx; },
@@ -3109,5 +3096,6 @@ window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera
     updateRooms(performance.now());
     camera.position.copy(player.pos);
     camera.rotation.set(player.pitch, player.yaw, 0);
+    daisenLandscape?.update(0);
     renderer.render(scene, camera);
   } };

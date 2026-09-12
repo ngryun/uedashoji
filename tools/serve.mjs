@@ -59,6 +59,7 @@ http.createServer((req, res) => {
     || pathname === '/social.js' || pathname === '/firebase-config.js'
     || pathname === '/guestbook-screen.js'
     || pathname === '/lobby-atmosphere.js'
+    || pathname === '/daisen-landscape.js'
     || pathname === '/quiz-data.js' || pathname === '/manifest.json'
     || pathname.startsWith('/lib/')
     || (pathname.startsWith('/assets/') && !pathname.startsWith('/assets/.source-map/'));

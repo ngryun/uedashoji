@@ -1700,7 +1700,12 @@ function buildMuseum(manifest) {
         if (!stops.length) return;
         if (def.usePartition && prevLi === 1 && li === 2 && seg.length) {
           const prev = seg[seg.length - 1];
-          seg.push({ x: 0, z: prev.z + Math.sign(prev.z - cz) * 1.9, floor: def.floor });
+          // 실제 가벽 끝 바깥에서 완전히 건넌 뒤 다음 작품으로 접근한다.
+          const endZ = cz + Math.sign(prev.z - cz) * ((L - 6.8) / 2 + 1.0);
+          seg.push(
+            { x: prev.x, z: endZ, floor: def.floor },
+            { x: stops[0].x, z: endZ, floor: def.floor }
+          );
         }
         seg.push(...stops);
         prevLi = li;
@@ -1761,7 +1766,7 @@ function buildMuseum(manifest) {
     wp(5.0, dayDefs[3].zFrom + 1.4, 1),
     { x: 5.5, z: cinemaInfo.cz, floor: 1, dwell: 45, look: cinemaInfo.screen },
     // 시어터 → 2F 로비: 좌석 남측으로 빠져 중앙 통로 → 남쪽 문
-    wp(5.2, -0.5, 1), wp(0, -0.5, 1), wp(0, cinemaDef.zFrom + 1.3, 1),
+    wp(5.2, -0.85, 1), wp(0, -0.85, 1), wp(0, cinemaDef.zFrom + 1.3, 1),
     // 2F 로비 → 중앙 계단으로 1층 하강
     wp(sx1, s1.zTop - 0.8, 1), wp(sx1, s1.zBottom + 0.9, 0),
     // 난간을 피해 서쪽으로 빠져나와 처음(Day 1 입구)으로 순환
@@ -2060,7 +2065,7 @@ function updateBgm(dt) {
 
 /* ═══════════════════ 자동 관람 모드 ═══════════════════ */
 // 관람 동선을 따라 아주 천천히 이동하며 작품마다 멈춰 감상한다. 조작하면 해제.
-const autoTour = { active: false, idx: 0, wait: 0, stuck: 0 };
+const autoTour = { active: false, idx: 0, wait: 0, stuck: 0, speed: 0 };
 const autoBtn = document.getElementById('autoBtn');
 const autoEnterBtn = document.getElementById('autoEnterBtn');
 
@@ -2086,7 +2091,7 @@ function startAutoTour() {
     if (d < bestD) { bestD = d; best = i; }
   });
   autoTour.active = true;
-  autoTour.idx = best; autoTour.wait = 0; autoTour.stuck = 0;
+  autoTour.idx = best; autoTour.wait = 0; autoTour.stuck = 0; autoTour.speed = 0;
   setAutoButtonUI();
   if (document.pointerLockElement) document.exitPointerLock(); // 자동 관람 중에는 마우스 락 불필요
   showHint('자동 관람 중 · 조작하면 해제됩니다<br>自動観覧中 · 操作すると解除されます');
@@ -2104,54 +2109,62 @@ function updateAutoTour(dt) {
   if (!stop) { stopAutoTour(true); return; }
   const dx = stop.x - player.pos.x, dz = stop.z - player.pos.z;
   const dist = Math.hypot(dx, dz);
-  let targetYaw = player.yaw, targetPitch = 0;
+  const arrived = dist <= 0.06;
+  const dwells = stop.art || stop.dwell;
+  let targetYaw = arrived ? player.yaw : Math.atan2(-dx, -dz);
+  let targetPitch = 0;
 
-  const dwells = stop.art || stop.dwell;   // 감상하며 멈추는 지점인가
-  if (dist <= (dwells ? 0.15 : 0.5)) {
-    if (dwells) {
-      autoTour.wait += dt;
-      const need = stop.dwell || (stop.art.isVideo ? AUTO_DWELL_VIDEO : AUTO_DWELL_PHOTO);
-      if (autoTour.wait >= need) {
-        autoTour.wait = 0;
-        autoTour.idx = (autoTour.idx + 1) % tourStops.length;
-      }
-    } else {
-      autoTour.idx = (autoTour.idx + 1) % tourStops.length;
-    }
-  } else {
-    const step = Math.min(dist, AUTO_SPEED * dt);
-    const px = player.pos.x, pz = player.pos.z;
-    player.pos.x += dx / dist * step;
-    player.pos.z += dz / dist * step;
-    resolveCollisions();
-    // 안전장치: 벽에 걸려 2.5초 이상 못 움직이면 목표 지점으로 옮긴다.
-    const moved = Math.hypot(player.pos.x - px, player.pos.z - pz);
-    if (step > 1e-6 && moved < step * 0.25) {
-      autoTour.stuck += dt;
-      if (autoTour.stuck > 2.5) {
-        player.pos.x = stop.x; player.pos.z = stop.z;
-        player.floor = stop.floor;
-        player.pos.y = EYE + player.floor * FLOOR_HEIGHT;
-        player.velY = 0;
-        updateFloorNav(player.floor);
-        autoTour.stuck = 0;
-      }
-    } else autoTour.stuck = 0;
-    targetYaw = Math.atan2(-dx, -dz); // 걷는 방향을 바라본다
-  }
-  // 작품·스크린 근처에서는 그쪽으로 시선을 돌린다.
+  // 거리 경계에서 시선이 갑자기 바뀌지 않도록 작품 쪽으로 서서히 전환한다.
   const lookAt = stop.art ? stop.art.pos : stop.look;
-  if (lookAt && dist < (stop.look ? 6.5 : 2.4)) {
+  if (lookAt) {
     const ax = lookAt.x - player.pos.x, az = lookAt.z - player.pos.z;
     const ah = Math.hypot(ax, az);
+    const approach = Math.max(0, Math.min(1, 1 - dist / (stop.look ? 6.5 : 2.4)));
+    const blend = arrived ? 1 : approach * approach * (3 - 2 * approach);
     if (ah > 1e-4) {
-      targetYaw = Math.atan2(-ax, -az);
-      targetPitch = Math.atan2(lookAt.y - player.pos.y, ah);
+      targetYaw = angleLerp(targetYaw, Math.atan2(-ax, -az), blend);
+      targetPitch = Math.atan2(lookAt.y - player.pos.y, ah) * blend;
     }
   }
-  const t = Math.min(1, dt * 2.2);
-  player.yaw = angleLerp(player.yaw, targetYaw, t);
-  player.pitch += (targetPitch - player.pitch) * t;
+  // 프레임률과 무관한 감쇠 + 초당 45도 제한으로 급회전을 막는다.
+  const easing = 1 - Math.exp(-2.2 * dt);
+  const yawDelta = angleLerp(player.yaw, targetYaw, 1) - player.yaw;
+  const turnLimit = Math.PI / 4 * dt;
+  player.yaw += Math.max(-turnLimit, Math.min(turnLimit, yawDelta * easing));
+  player.pitch += (targetPitch - player.pitch) * easing;
+
+  if (arrived) {
+    autoTour.speed = 0;
+    if (dwells) {
+      // 작품을 향해 시선이 정돈된 뒤부터 감상 시간을 센다.
+      if (Math.abs(yawDelta) < 0.12 && Math.abs(targetPitch - player.pitch) < 0.08) {
+        autoTour.wait += dt;
+      }
+      const need = stop.dwell || (stop.art.isVideo ? AUTO_DWELL_VIDEO : AUTO_DWELL_PHOTO);
+      if (autoTour.wait < need) return;
+    }
+    autoTour.wait = 0;
+    autoTour.idx = (autoTour.idx + 1) % tourStops.length;
+    return;
+  }
+
+  // 출발은 서서히, 도착 전에는 제동 거리만큼 미리 감속한다.
+  const desiredSpeed = Math.min(AUTO_SPEED, Math.sqrt(2 * 0.7 * Math.max(0, dist - 0.03)));
+  const acceleration = desiredSpeed < autoTour.speed ? 0.7 : 0.55;
+  autoTour.speed += Math.max(-acceleration * dt, Math.min(acceleration * dt, desiredSpeed - autoTour.speed));
+  const step = Math.min(dist, autoTour.speed * dt);
+  const px = player.pos.x, pz = player.pos.z;
+  player.pos.x += dx / dist * step;
+  player.pos.z += dz / dist * step;
+  resolveCollisions();
+  const moved = Math.hypot(player.pos.x - px, player.pos.z - pz);
+  if (step > 1e-6 && moved < step * 0.25) {
+    autoTour.stuck += dt;
+    if (autoTour.stuck > 2.5) {
+      stopAutoTour(true);
+      showHint('이동 경로가 막혀 자동 관람을 멈췄습니다. 조금 이동한 뒤 다시 시작해주세요.<br>通路が塞がれています。少し移動してから再開してください。');
+    }
+  } else autoTour.stuck = 0;
 }
 
 autoBtn.addEventListener('click', (e) => {

@@ -29,6 +29,20 @@ export function makeSlides(entries, measure, maxWidth) {
   });
 }
 
+// 한 바퀴 동안 각 글을 한 번씩 보여주고, 다음 바퀴의 첫 글은 직전 글과 다르게 한다.
+export function shuffleEntries(entries, previousId = null, random = Math.random) {
+  const shuffled = [...entries];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  if (shuffled.length > 1 && previousId !== null && shuffled[0].id === previousId) {
+    const j = 1 + Math.floor(random() * (shuffled.length - 1));
+    [shuffled[0], shuffled[j]] = [shuffled[j], shuffled[0]];
+  }
+  return shuffled;
+}
+
 export function createGuestbookScreen() {
   const canvas = document.createElement('canvas');
   canvas.width = 1536; canvas.height = 960;
@@ -49,6 +63,7 @@ export function createGuestbookScreen() {
   plane.position.z = 0.06;
   group.add(plane);
   let slides = [], index = 0, elapsed = 0, paused = false, signature = '';
+  let sourceEntries = [];
   let status = 'loading', local = false, lastPaint = '';
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -101,9 +116,15 @@ export function createGuestbookScreen() {
       local = mode === 'local'; status = 'ready';
       if (signature !== nextSignature) {
         const previous = slides[index];
+        sourceEntries = entries.filter(entry => String(entry.message || '').trim());
+        const ordered = shuffleEntries(sourceEntries);
+        // 실시간 갱신 중에도 읽고 있던 글과 페이지는 유지한다.
+        const current = previous ? ordered.findIndex(entry => entry.id === previous.entry.id) : -1;
+        if (current >= 0) ordered.unshift(...ordered.splice(current, 1));
         ctx.font = `400 46px ${font}`;
-        slides = makeSlides(entries, text => ctx.measureText(text).width, 1336);
-        const retained = previous ? slides.findIndex(s => s.entry.id === previous.entry.id && s.page === previous.page) : -1;
+        slides = makeSlides(ordered, text => ctx.measureText(text).width, 1336);
+        const page = current >= 0 ? Math.min(previous.page, slides[0].count - 1) : 0;
+        const retained = previous ? slides.findIndex(s => s.entry.id === previous.entry.id && s.page === page) : -1;
         index = retained < 0 ? 0 : retained;
         if (retained < 0) elapsed = 0;
         signature = nextSignature;
@@ -120,7 +141,15 @@ export function createGuestbookScreen() {
       const slide = slides[index];
       if (!near && slides.length > 1) {
         elapsed += dt;
-        if (elapsed >= slide.duration) { elapsed = 0; index = (index + 1) % slides.length; }
+        if (elapsed >= slide.duration) {
+          elapsed = 0;
+          index++;
+          if (index >= slides.length) {
+            ctx.font = `400 46px ${font}`;
+            slides = makeSlides(shuffleEntries(sourceEntries, slide.entry.id), text => ctx.measureText(text).width, 1336);
+            index = 0;
+          }
+        }
       }
       const duration = slides[index]?.duration || 10;
       const alpha = reducedMotion || paused || slides.length < 2 ? 1

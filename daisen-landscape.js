@@ -18,6 +18,8 @@ const landscapeGLSL = `
   uniform float verticalScale;
   uniform vec3 horizonColor;
   uniform vec3 skyColor;
+  uniform sampler2D cloudMask;
+  uniform float atmosphereTime;
   vec3 landscape(vec3 ray) {
     ray = normalize(ray);
     float elevation = ray.y / max(length(ray.xz), 0.001);
@@ -31,12 +33,48 @@ const landscapeGLSL = `
     vec3 photo = texture2D(backdrop, uv).rgb;
     // 사진 자체의 구름과 명암을 살리고 지평선 근처에만 옅은 대기감을 더한다.
     photo = mix(photo, horizonColor, 0.055 + 0.08 * (1.0 - smoothstep(0.0, 0.35, v)));
-    return mix(sky, photo, heightBlend * imageReady);
+    vec3 background = mix(sky, photo, heightBlend * imageReady);
+    // 정상 위의 하늘에만 옅은 구름을 더한다. 산 사진 자체는 움직이지 않는다.
+    vec2 cloudUV = vec2(atan(ray.z, ray.x) / 6.2831853, elevation * 0.65);
+    cloudUV.x -= atmosphereTime * 0.00065;
+    float clouds = texture2D(cloudMask, cloudUV).r;
+    #if CLOUD_DETAIL == 1
+      clouds = clouds * 0.7 + texture2D(cloudMask, cloudUV * 1.7 + vec2(0.31,0.17)).r * 0.3;
+    #endif
+    float cloudAlpha = clouds * 0.14 * smoothstep(0.54, 0.74, v);
+    return mix(background, skyColor, cloudAlpha);
   }
 `;
 
 function randomSource(seed) {
   return () => { seed = (Math.imul(seed, 1664525) + 1013904223) | 0; return (seed >>> 0) / 4294967296; };
+}
+
+// 주기적인 노이즈 타일 하나를 재사용한다. 프레임마다 캔버스를 다시 그리지 않는다.
+function cloudTexture(mobile) {
+  const width = mobile ? 128 : 256, height = width / 2;
+  const image = document.createElement('canvas'); image.width = width; image.height = height;
+  const ctx = image.getContext('2d'), pixels = ctx.createImageData(width, height);
+  const random = randomSource(20260913);
+  const grids = [8, 16, 32].map(size => ({ size, values: Array.from({ length: size * size }, random) }));
+  const smooth = t => t * t * (3 - 2 * t);
+  const noise = (u, v, { size, values }) => {
+    const x = u * size, y = v * size, ix = Math.floor(x), iy = Math.floor(y);
+    const fx = smooth(x - ix), fy = smooth(y - iy);
+    const at = (dx, dy) => values[((iy + dy) % size) * size + ((ix + dx) % size)];
+    return (at(0,0) * (1-fx) + at(1,0) * fx) * (1-fy) + (at(0,1) * (1-fx) + at(1,1) * fx) * fy;
+  };
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const value = grids.reduce((sum, grid, i) => sum + noise(x / width, y / height, grid) * [0.62,0.26,0.12][i], 0);
+    const opacity = smooth(Math.min(1, Math.max(0, (value - 0.43) / 0.3)));
+    const index = (y * width + x) * 4;
+    pixels.data[index] = pixels.data[index + 1] = pixels.data[index + 2] = Math.round(opacity * 255);
+    pixels.data[index + 3] = 255;
+  }
+  ctx.putImageData(pixels, 0, 0);
+  const map = new THREE.CanvasTexture(image);
+  map.wrapS = map.wrapT = THREE.RepeatWrapping;
+  return map;
 }
 
 function groundTexture() {
@@ -61,9 +99,11 @@ export function createDaisenLandscape({ scene, camera, zEnd, mobile }) {
     span: { value: DAISEN_VIEW.horizontalAngle },
     verticalScale: { value: DAISEN_VIEW.horizontalAngle * DAISEN_VIEW.cropHeight / DAISEN_VIEW.imageAspect },
     horizonColor: { value: new THREE.Color(0xb6c3c9) }, skyColor: { value: new THREE.Color(0xe1e6e6) },
+    cloudMask: { value: cloudTexture(mobile) }, atmosphereTime: { value: 0 },
   };
   const sky = new THREE.Mesh(new THREE.SphereGeometry(190, mobile ? 32 : 64, mobile ? 16 : 32),
-    new THREE.ShaderMaterial({ uniforms: shared, side: THREE.BackSide, depthWrite: false, toneMapped: false,
+    new THREE.ShaderMaterial({ uniforms: shared, defines: { CLOUD_DETAIL: mobile ? 0 : 1 },
+      side: THREE.BackSide, depthWrite: false, toneMapped: false,
       vertexShader: `varying vec3 direction;
         void main() { direction = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
       fragmentShader: `varying vec3 direction; ${landscapeGLSL}
@@ -78,9 +118,9 @@ export function createDaisenLandscape({ scene, camera, zEnd, mobile }) {
 
   const poolZMin = zEnd - 10, poolZMax = 20, poolLength = poolZMax - poolZMin;
   const poolCenterZ = (poolZMin + poolZMax) / 2;
-  const waterUniforms = { ...shared, time: { value: 0 } };
+  const waterUniforms = { ...shared, time: shared.atmosphereTime };
   const water = new THREE.Mesh(new THREE.PlaneGeometry(18, poolLength), new THREE.ShaderMaterial({
-    uniforms: waterUniforms, toneMapped: false,
+    uniforms: waterUniforms, defines: { CLOUD_DETAIL: mobile ? 0 : 1 }, toneMapped: false,
     vertexShader: `varying vec3 worldPoint;
       void main() { vec4 world = modelMatrix * vec4(position,1.0); worldPoint = world.xyz;
         gl_Position = projectionMatrix * viewMatrix * world; }`,
@@ -143,8 +183,25 @@ export function createDaisenLandscape({ scene, camera, zEnd, mobile }) {
   const grassGeo = new THREE.BufferGeometry();
   grassGeo.setAttribute('position', new THREE.Float32BufferAttribute(blades, 3)); grassGeo.computeVertexNormals();
   const count = mobile ? 180 : 360;
-  const grass = new THREE.InstancedMesh(grassGeo, new THREE.MeshStandardMaterial({ color: 0xa3a07a,
-    roughness: 1, side: THREE.DoubleSide }), count);
+  const grassMaterial = new THREE.MeshStandardMaterial({ color: 0xa3a07a,
+    roughness: 1, side: THREE.DoubleSide });
+  grassMaterial.onBeforeCompile = shader => {
+    shader.uniforms.atmosphereTime = shared.atmosphereTime;
+    shader.vertexShader = `uniform float atmosphereTime;\n${shader.vertexShader}`.replace('#include <begin_vertex>', `
+      #include <begin_vertex>
+      float phase = instanceMatrix[3].x * 0.37 + instanceMatrix[3].z * 0.21;
+      float tip = clamp(position.y / 0.35, 0.0, 1.0);
+      float breeze = 0.75 + 0.25 * sin(atmosphereTime * 0.27 + phase * 0.3);
+      transformed.x += sin(atmosphereTime * 1.4 + phase) * 0.06 * tip * tip * breeze;
+      transformed.z += cos(atmosphereTime * 1.1 + phase) * 0.025 * tip * tip * breeze;
+    `);
+  };
+  grassMaterial.customProgramCacheKey = () => 'daisen-grass-wind-v1';
+  // GPU에서 움직이는 잎 끝까지 포함해 가장자리에서 갑자기 사라지지 않게 한다.
+  grassGeo.computeBoundingBox(); grassGeo.boundingBox.expandByScalar(0.07);
+  grassGeo.computeBoundingSphere(); grassGeo.boundingSphere.radius += 0.07;
+  const grass = new THREE.InstancedMesh(grassGeo, grassMaterial, count);
+  grass.name = 'daisen-wind-grass';
   const random = randomSource(713), transform = new THREE.Object3D();
   for (let i = 0; i < count; i++) {
     const x = 29 + random() * 22, z = poolZMin - 5 + random() * (poolLength + 10);

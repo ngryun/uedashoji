@@ -34,15 +34,18 @@ const landscapeGLSL = `
     // 사진 자체의 구름과 명암을 살리고 지평선 근처에만 옅은 대기감을 더한다.
     photo = mix(photo, horizonColor, 0.055 + 0.08 * (1.0 - smoothstep(0.0, 0.35, v)));
     vec3 background = mix(sky, photo, heightBlend * imageReady);
-    // 정상 위의 하늘에만 옅은 구름을 더한다. 산 사진 자체는 움직이지 않는다.
-    vec2 cloudUV = vec2(atan(ray.z, ray.x) / 6.2831853, elevation * 0.65);
-    cloudUV.x -= atmosphereTime * 0.00065;
+    // 로비 창에 들어오는 낮은 하늘까지 표시하되 정상 주변은 비워 둔다.
+    // 전경 구름은 사진 속 구름보다 작은 덩어리로 흘러 움직임을 알아볼 수 있게 한다.
+    vec2 cloudUV = vec2(atan(ray.z, ray.x) / 6.2831853 * 1.6 + 0.2, elevation * 1.4 + 0.2);
+    cloudUV.x -= atmosphereTime * 0.0028;
     float clouds = texture2D(cloudMask, cloudUV).r;
     #if CLOUD_DETAIL == 1
       clouds = clouds * 0.7 + texture2D(cloudMask, cloudUV * 1.7 + vec2(0.31,0.17)).r * 0.3;
     #endif
-    float cloudAlpha = clouds * 0.14 * smoothstep(0.54, 0.74, v);
-    return mix(background, skyColor, cloudAlpha);
+    float ridge = 0.12 + 0.32 * exp(-pow((u - 0.56) / 0.23, 2.0));
+    float cloudAlpha = clouds * 0.82 * smoothstep(ridge, ridge + 0.035, v);
+    vec3 cloudColor = mix(horizonColor * 0.96, skyColor * 1.14, smoothstep(0.0, 0.65, clouds));
+    return mix(background, cloudColor, cloudAlpha);
   }
 `;
 
@@ -66,7 +69,7 @@ function cloudTexture(mobile) {
   };
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const value = grids.reduce((sum, grid, i) => sum + noise(x / width, y / height, grid) * [0.62,0.26,0.12][i], 0);
-    const opacity = smooth(Math.min(1, Math.max(0, (value - 0.43) / 0.3)));
+    const opacity = smooth(Math.min(1, Math.max(0, (value - 0.38) / 0.28)));
     const index = (y * width + x) * 4;
     pixels.data[index] = pixels.data[index + 1] = pixels.data[index + 2] = Math.round(opacity * 255);
     pixels.data[index + 3] = 255;

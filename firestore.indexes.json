@@ -1,0 +1,17 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "visitorTraces",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "room", "order": "ASCENDING" },
+        { "fieldPath": "layout", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    { "collectionGroup": "visitorTraces", "fieldPath": "expiresAt", "ttl": true, "indexes": [] },
+    { "collectionGroup": "visitorTraces", "fieldPath": "points", "indexes": [] }
+  ]
+}

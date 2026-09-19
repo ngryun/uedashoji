@@ -11,3 +11,7 @@ assets/.source-map/
 # Converter and Pages build artifacts
 .manifest.*
 _site/
+
+# Firebase emulator diagnostics
+*-debug.log
+.firebase/

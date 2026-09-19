@@ -57,7 +57,7 @@ http.createServer((req, res) => {
   if (pathname === '/') pathname = '/index.html';
   const isPublicPath = pathname === '/index.html' || pathname === '/main.js'
     || pathname === '/social.js' || pathname === '/firebase-config.js'
-    || pathname === '/guestbook-screen.js'
+    || pathname === '/guestbook-screen.js' || pathname === '/visitor-traces.js'
     || pathname === '/lobby-atmosphere.js'
     || pathname === '/daisen-landscape.js'
     || pathname === '/quiz-data.js' || pathname === '/manifest.json'

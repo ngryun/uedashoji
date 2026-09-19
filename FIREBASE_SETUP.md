@@ -116,3 +116,51 @@ service cloud.firestore {
 ## 미성년자 개인정보 안내
 
 방명록에는 이름·메시지가 공개 저장됩니다. 학교 정책에 맞게 최소 정보만 받도록 안내하고, 전시 종료 후 데이터 보관/폐기 계획을 정해 두시길 권합니다.
+
+## 방문 발자국 공유 (60일)
+
+발자국은 `visitorTraces` 컬렉션을 사용합니다. Firebase Authentication의 **익명 로그인**을 활성화해야 기록·구독이 시작됩니다. 이름, 학교, 방명록 ID, 인증 UID는 발자국 문서에 저장하지 않습니다. 문서 ID에는 탭별 무작위 방문 ID와 공간·구간 번호만 들어갑니다. 인증은 쓰기 권한 확인에만 사용합니다.
+
+### 배포 순서
+
+1. 기존 프로젝트의 인덱스·TTL 설정과 `firestore.indexes.json`을 비교해 다른 서비스의 설정을 보존합니다.
+2. 프로젝트 루트에서 보안 규칙과 인덱스·TTL을 배포합니다.
+
+   ```bash
+   firebase deploy --only firestore:rules,firestore:indexes --project yonago-45610
+   ```
+
+3. Firebase 콘솔에서 `visitorTraces` 복합 인덱스가 **사용 설정됨** 상태인지 확인합니다. Google Cloud Firestore 콘솔의 TTL에서 `visitorTraces.expiresAt` 정책이 활성화되었는지 확인합니다. TTL 정책은 결제 사용 설정이 필요할 수 있으며 삭제 비용이 발생합니다.
+4. 이후 사이트를 배포합니다. GitHub Pages 워크플로에는 `visitor-traces.js`가 포함되어 있습니다.
+5. 서로 다른 브라우저에서 입장한 뒤 한쪽에서 4m 이상 걸어 다른 쪽에서 6개의 발자국이 보이는지 확인합니다. ‘내 발자국 남기기’를 끄고 새로고침해 설정이 유지되는지도 확인합니다.
+
+TTL 실제 삭제는 즉시 수행되지 않습니다. 앱은 서버 기록 시각 기준 60일 또는 `expiresAt` 중 먼저 도달한 시점부터 표시하지 않습니다. 클라이언트 시계 오차는 TTL 쓰기 규칙에서 ±5분까지만 허용합니다. 정책 활성화 전에는 만료 문서가 데이터베이스에 남으므로 TTL 활성화까지 배포 완료로 간주하지 않습니다. [공식 TTL 안내](https://firebase.google.com/docs/firestore/ttl), [인덱스·TTL 설정 형식](https://firebase.google.com/docs/reference/firestore/indexes/).
+
+### 로컬 검증
+
+Java 21 이상과 Firebase CLI가 필요합니다. 아래 명령은 실제 프로젝트 대신 `demo-ueda-traces` 에뮬레이터만 사용합니다.
+
+```bash
+firebase emulators:exec --only firestore,auth --project demo-ueda-traces \
+  "node --test tests/*.test.mjs"
+```
+
+일반 `node --test tests/*.test.mjs`에서는 에뮬레이터 환경변수가 없는 보안 규칙 테스트만 건너뜁니다. 에뮬레이터는 복합 인덱스 준비 여부와 운영 TTL 삭제를 검증하지 않으므로 배포 후 콘솔 확인도 필요합니다.
+
+공간별 최근 24구간만 구독하고, 현재 층의 현재·인접 공간을 떠나거나 탭을 숨기면 구독을 해제합니다. 6걸음이 완성되면 온라인 트랜잭션으로 저장하며, 오프라인에서 추후 업로드할 대기열은 만들지 않습니다. 전송 전 설정을 끄면 해당 기록을 폐기합니다. 이미 전송한 기록은 수정·삭제할 수 없고 만료까지 유지됩니다.
+
+한 방문당 공간별 두 구간 한도는 탭의 `sessionStorage`에 유지하는 클라이언트 제한입니다. 인증·형식·좌표 범위·구간 길이·만료 시각은 서버 규칙으로 검증하지만, 악의적인 클라이언트에 대한 서버 쓰기 빈도 제한은 아닙니다. 정확한 공간 경계와 현재 레이아웃은 표시할 때 추가 검증합니다. 구조가 바뀌면 계산된 레이아웃 버전이 바뀌어 과거 흔적은 표시되지 않습니다.
+
+
+브라우저 공유·모바일 화면 검증은 Playwright를 설치한 환경에서 별도의 터미널 세 개로 실행할 수 있습니다. 스크립트는 **로컬 demo 에뮬레이터 문서만 초기화**하며 운영 Firebase에 접속하지 않습니다.
+
+```bash
+# 터미널 1
+firebase emulators:start --only firestore,auth --project demo-ueda-traces
+# 터미널 2
+HOST=127.0.0.1 PORT=8736 node tools/serve.mjs
+# 터미널 3 (Playwright와 Chromium 설치 필요)
+node tools/verify-visitor-traces.cjs
+```
+
+`PLAYWRIGHT_MODULE`로 설치된 Playwright 모듈 경로, `CHROME_BIN`으로 사용할 Chrome 실행 파일, `TRACE_SCREENSHOTS`로 캡처 저장 폴더를 지정할 수 있습니다. 기본 캡처 위치는 OS 임시 폴더입니다. 초기 익명 인증 중의 걸음은 메모리에 잠시 보관하고, 연결 완료 시에도 기록 설정이 켜져 있을 때만 전송합니다.

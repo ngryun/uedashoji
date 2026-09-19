@@ -220,3 +220,36 @@ export async function updateGuestbookEntry(id, { name, school, message, badge })
   }
   return { id, ...clean, badge: badgeVal, editedAt: Date.now(), editable: true };
 }
+
+/* ── 이름 없는 방문 발자국: 방명록 작성자 정보와 연결하지 않는다. ── */
+export function canShareVisitorTraces() {
+  return mode === 'firebase' && Boolean(fb?.authUser?.uid);
+}
+
+export async function saveVisitorTrace(segment, shouldWrite = () => true) {
+  if (!canShareVisitorTraces()) throw new Error('TRACE_SHARING_UNAVAILABLE');
+  // Transactions fail offline rather than queuing an upload after recording was disabled.
+  // No owner ID, visitor name or school is stored in the public trace document.
+  const { id, room, layout, points } = segment;
+  const ref = fb.doc(fb.db, 'visitorTraces', id);
+  return fb.runTransaction(fb.db, async transaction => {
+    const existing = await transaction.get(ref);
+    if (existing.exists()) return true;
+    if (!shouldWrite()) return false;
+    transaction.set(ref, { room, layout, points, createdAt: fb.serverTimestamp(),
+      expiresAt: fb.Timestamp.fromMillis(Date.now() + 60 * 86400000) });
+    return true;
+  }, { maxAttempts: 2 });
+}
+
+export function watchVisitorTraces({ room, layout }, callback, onError = () => {}) {
+  if (!canShareVisitorTraces()) { callback([]); return () => {}; }
+  const q = fb.query(fb.collection(fb.db, 'visitorTraces'),
+    fb.where('room', '==', room), fb.where('layout', '==', layout),
+    fb.where('createdAt', '>', fb.Timestamp.fromMillis(Date.now() - 60 * 86400000)),
+    fb.orderBy('createdAt', 'desc'), fb.limit(24));
+  return fb.onSnapshot(q, snapshot => callback(snapshot.docs
+    .filter(doc => !doc.metadata.hasPendingWrites)
+    .map(doc => { const data = doc.data(); return { ...data, id: doc.id,
+      createdAt: data.createdAt?.toMillis() ?? NaN, expiresAt: data.expiresAt?.toMillis() ?? NaN }; })), onError);
+}

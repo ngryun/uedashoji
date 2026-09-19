@@ -19,9 +19,11 @@
     position: fixed; inset: 0; z-index: 50;
     background: linear-gradient(160deg, #1c1f24 0%, #2b3038 60%, #3a414b 100%);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
+    justify-content: safe center; overflow-y: auto;
     color: #e8e6e1; text-align: center; padding: 24px; gap: 10px;
     transition: opacity .6s ease;
   }
+  #start > * { flex-shrink: 0; }
   #start.hidden { opacity: 0; pointer-events: none; }
   #start .jp {
     max-width: 960px; font-size: clamp(20px, 4vw, 36px); line-height: 1.45;
@@ -96,6 +98,14 @@
     border-radius: 999px; background: rgba(20,22,26,.5); backdrop-filter: blur(8px);
     color: rgba(255,255,255,.7); font-size: 11.5px; letter-spacing: .08em; cursor: pointer;
   }
+  #traceSettings { margin: 14px auto 0; max-width: 560px; font-size: 12px; line-height: 1.7; color: #ccc6bc; }
+  #traceSettings label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+  #traceSettings input { accent-color: #b4a391; width: 17px; height: 17px; }
+  #traceSettings p { margin-top: 5px; }
+  #traceStatus { position: fixed; left: 16px; top: calc(58px + env(safe-area-inset-top)); z-index: 12;
+    max-width: min(440px, calc(100vw - 32px)); padding: 7px 10px; border-radius: 8px;
+    color: #eee8df; background: rgba(20,22,26,.75); font-size: 11px; line-height: 1.6; pointer-events: none; }
+  body:not(.playing) #traceStatus { display: none; }
   #bgmBtn { display: none; }
   body.has-bgm #bgmBtn { display: block; }
   #hudLeft button[aria-pressed="true"] { color: #17191d; background: #f0eee9; }
@@ -294,7 +304,19 @@
   #btnRun.on { background: rgba(120,190,255,.35); border-color: rgba(160,210,255,.8); }
   .tbtn:active { background: rgba(255,255,255,.28); }
 
+  @media (max-width: 1100px) {
+    #roomLabel { top: calc(62px + env(safe-area-inset-top)); }
+    #traceStatus { top: calc(100px + env(safe-area-inset-top)); }
+  }
   @media (max-width: 520px) {
+    #floorNav { top: calc(58px + env(safe-area-inset-top)); gap: 2px; padding: 3px; }
+    #floorNav button { padding: 6px 7px; font-size: 10px; }
+    #roomLabel { left: 16px; transform: none; max-width: calc(100vw - 210px);
+      overflow: hidden; text-overflow: ellipsis; padding: 7px 9px; font-size: 10px; letter-spacing: .05em; }
+    #hudLeft { max-width: calc(100vw - 32px); overflow-x: auto; }
+    #hudLeft button { flex-shrink: 0; }
+    #hudLeft { gap: 4px; }
+    #hudLeft button { padding: 8px 8px; font-size: 10px; letter-spacing: 0; }
     #startActions { flex-direction: column; width: min(280px, 90vw); }
     #enterBtn, #galleryBtn, #autoEnterBtn, #guestbookBtn { width: 100%; }
     #galleryGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -326,6 +348,10 @@
     <button id="galleryBtn" type="button" disabled>2D 사진 목록 · 写真リスト</button>
     <button id="guestbookBtn" type="button">방명록 · ゲストブック</button>
   </div>
+  <div id="traceSettings">
+    <label><input id="traceToggle" type="checkbox" checked aria-describedby="traceNotice">내 발자국 남기기 · <span lang="ja">自分の足跡を残す</span></label>
+    <p id="traceNotice">걸음이 이름 없는 발자국으로 60일 동안 남습니다.<br><span lang="ja">歩いた跡が、名前のない足跡として60日間残ります。</span></p>
+  </div>
   <div id="loadNote" role="status" aria-live="polite">미술관을 준비하는 중… · 美術館を準備しています…</div>
 </main>
 
@@ -339,8 +365,11 @@
 <div id="hudLeft">
   <button id="autoBtn" type="button" aria-pressed="false" aria-label="자동 관람 켜기·끄기 · 自動観覧のオン・オフ">▶ 자동 · 自動</button>
   <button id="guestbookHudBtn" type="button" aria-label="방명록 열기 · ゲストブックを開く">✍ 방명록 · 芳名録</button>
+  <button id="traceHudBtn" type="button" aria-pressed="true" aria-label="내 발자국 남기기 · 自分の足跡を残す">발자국 켜짐 · 足跡 ON</button>
   <button id="bgmBtn" type="button" aria-pressed="false" aria-label="배경 음악 켜기·끄기 · BGMのオン・オフ">♪ BGM</button>
 </div>
+
+<div id="traceStatus" role="status" hidden></div>
 
 <div id="viewer" role="dialog" aria-modal="true" aria-labelledby="viewerCap" aria-hidden="true" tabindex="-1">
   <button id="viewerClose" type="button" aria-label="확대 보기 닫기 · 拡大表示を閉じる">✕</button>

@@ -3,11 +3,13 @@
 import * as THREE from 'three';
 import * as Social from './social.js';
 import { SECRET_QUIZ, REWARD_VIDEO } from './quiz-data.js';
+import { createVisitorTraces, tracePreference, saveTracePreference } from './visitor-traces.js';
 import { createGuestbookScreen } from './guestbook-screen.js';
 import { createLobbyFinish } from './lobby-atmosphere.js';
 import { createDaisenLandscape } from './daisen-landscape.js';
 
 let guestbookScreen = null;
+let visitorTraces = null;
 let lobbyAtmosphere = null;
 let daisenLandscape = null;
 let screenWatchStarted = false;
@@ -1853,6 +1855,7 @@ function switchFloor(floor, announce = true) {
   const target = floorSpawnPoints[floor];
   if (!target || player.floor === floor && player.pos.distanceToSquared(target) < 0.01) return;
   if (autoTour.active) stopAutoTour(true); // 층 바로 이동은 수동 조작이므로 자동 관람 해제
+  visitorTraces?.reset();
   player.floor = floor;
   player.pos.copy(target);
   player.velY = 0; player.onGround = true;
@@ -2011,6 +2014,46 @@ if (IS_TOUCH) {
   renderer?.domElement.addEventListener('touchend', endTouch, { passive: true });
   renderer?.domElement.addEventListener('touchcancel', endTouch, { passive: true });
 }
+
+/* ── 방문 발자국 설정: 2D 모드에서도 선택을 유지한다. ── */
+let tracePreferences;
+try { tracePreferences = localStorage; } catch {}
+let tracesEnabled = tracePreference(tracePreferences);
+const traceToggle = document.getElementById('traceToggle');
+const traceHudBtn = document.getElementById('traceHudBtn');
+const traceStatus = document.getElementById('traceStatus');
+function updateTraceUI() {
+  traceToggle.checked = tracesEnabled;
+  traceHudBtn.setAttribute('aria-pressed', String(tracesEnabled));
+  traceHudBtn.textContent = tracesEnabled ? '발자국 켜짐 · 足跡 ON' : '발자국 꺼짐 · 足跡 OFF';
+}
+function updateTraceStatus(status) {
+  const text = status === 'shared' ? ''
+    : '공유에 연결되지 않아 내 발자국은 이 화면에만 보입니다 · 接続できないため、自分の足跡はこの画面だけに表示されます';
+  traceStatus.textContent = text;
+  traceStatus.hidden = !text;
+  traceHudBtn.title = text || '내 발자국 남기기 · 自分の足跡を残す';
+}
+function setTracesEnabled(value) {
+  tracesEnabled = value; saveTracePreference(tracePreferences, value);
+  visitorTraces?.setEnabled(value); updateTraceUI();
+}
+traceToggle.addEventListener('change', () => setTracesEnabled(traceToggle.checked));
+traceHudBtn.addEventListener('click', event => {
+  event.stopPropagation(); setTracesEnabled(!tracesEnabled);
+});
+window.addEventListener('storage', event => {
+  if (event.key === 'guest.traces.enabled.v1' || event.key === null) {
+    tracesEnabled = tracePreference(tracePreferences);
+    visitorTraces?.setEnabled(tracesEnabled); updateTraceUI();
+  }
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) visitorTraces?.suspend();
+  else visitorTraces?.reset();
+});
+window.addEventListener('pagehide', () => visitorTraces?.suspend());
+updateTraceUI();
 
 /* ═══════════════════ 배경 음악 ═══════════════════ */
 // 두 곡(assets/bgm.mp3, assets/bhm3.mp3)을 번갈아 무한 반복 재생. 없으면 버튼도 나타나지 않는다.
@@ -2175,6 +2218,7 @@ autoBtn.addEventListener('click', (e) => {
 /* 입장 버튼 */
 function enterMuseum(auto = false) {
   startScreenWatch();
+  visitorTraces?.start();
   startBgm(); // 사용자 제스처 시점이라 자동재생 정책에 걸리지 않는다.
   document.body.classList.add('playing');
   startEl.classList.add('hidden');
@@ -3024,6 +3068,11 @@ async function init() {
       return;
     }
     buildMuseum(manifest);
+    let traceStorage;
+    try { traceStorage = sessionStorage; } catch {}
+    visitorTraces = createVisitorTraces({ rooms, mobile: IS_TOUCH, storage: traceStorage,
+      social: Social, enabled: tracesEnabled, onStatus: updateTraceStatus });
+    scene.add(visitorTraces.mesh);
     // 시각 검수용: ?preview=video, day2-stair, secret-projection으로 시작 위치를 바꾼다.
     const preview = new URLSearchParams(location.search).get('preview');
     if (preview === 'video') {
@@ -3072,12 +3121,23 @@ async function init() {
   }
 }
 
+function updateVisitorTraces() {
+  const traceRoom = roomIndexAt(player.pos.z, player.floor);
+  const traceBounds = rooms[traceRoom];
+  visitorTraces?.update({ position: player.pos, room: traceRoom, hidden: document.hidden,
+    active: controlsActive && !autoTour.active && player.onGround && !viewerOpen
+      && stairProgressAt(player.pos.x, player.pos.z) === null && !inSecretZone(player)
+      && !!traceBounds && Math.abs(player.pos.x) < traceBounds.W / 2 - RADIUS
+      && player.pos.z <= traceBounds.zFrom && player.pos.z >= traceBounds.zTo });
+}
+
 const clock = new THREE.Clock();
 function loop() {
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePlayer(dt);
   updateChallenge();
+  updateVisitorTraces();
   updateRooms(performance.now());
   updateBgm(dt);
   if (cinemaCtl) cinemaCtl.update(dt);
@@ -3095,6 +3155,7 @@ window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera
   challenge,
   get cinema() { return cinemaCtl; },
   get landscape() { return daisenLandscape; },
+  get visitorTraces() { return visitorTraces; },
   get guestbookScreen() { return guestbookScreen; },
   get secretProjection() { return secretProjectionCtl; },
   get room() { return currentRoomIdx; },
@@ -3103,6 +3164,7 @@ window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera
   step(n = 1) { // rAF가 멈춘 환경에서 수동 프레임 진행 (테스트용)
     for (let i = 0; i < n; i++) {
       updatePlayer(1 / 60);
+      updateVisitorTraces();
       if (cinemaCtl) cinemaCtl.update(1 / 60);
       if (secretProjectionCtl) secretProjectionCtl.update();
     }

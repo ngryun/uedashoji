@@ -18,6 +18,44 @@ service cloud.firestore {
                  || (data.ownerId is string && data.ownerId.size() > 0));
     }
 
+    // Coordinates are bounded to the museum envelope; the client additionally checks
+    // the exact generated room bounds and layout hash before rendering.
+    function validTracePoint(p) {
+      return p is map && p.keys().hasOnly(['x', 'z', 'angle'])
+        && p.keys().hasAll(['x', 'z', 'angle'])
+        && p.x is number && p.x >= -8 && p.x <= 8
+        && p.z is number && p.z >= -500 && p.z <= 14
+        && p.angle is number && p.angle >= -3.141593 && p.angle <= 3.141593;
+    }
+    function adjacentTracePoints(a, b) {
+      return (a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z) <= 1;
+    }
+    function validTrace(data) {
+      return data.keys().hasOnly(['room', 'layout', 'points', 'createdAt', 'expiresAt'])
+        && data.keys().hasAll(['room', 'layout', 'points', 'createdAt', 'expiresAt'])
+        && data.room is int && data.room >= 0 && data.room <= 6
+        && data.layout is string && data.layout.matches('traces-v1-[0-9a-f]{1,8}')
+        && data.points is list && data.points.size() == 6
+        && validTracePoint(data.points[0]) && validTracePoint(data.points[1])
+        && validTracePoint(data.points[2]) && validTracePoint(data.points[3])
+        && validTracePoint(data.points[4]) && validTracePoint(data.points[5])
+        && adjacentTracePoints(data.points[0], data.points[1])
+        && adjacentTracePoints(data.points[1], data.points[2])
+        && adjacentTracePoints(data.points[2], data.points[3])
+        && adjacentTracePoints(data.points[3], data.points[4])
+        && adjacentTracePoints(data.points[4], data.points[5])
+        && data.createdAt == request.time
+        && data.expiresAt is timestamp
+        // TTL uses client time; allow at most five minutes of clock skew.
+        && data.expiresAt >= request.time + duration.value(60, 'd') - duration.value(5, 'm')
+        && data.expiresAt <= request.time + duration.value(60, 'd') + duration.value(5, 'm');
+    }
+    match /visitorTraces/{id} {
+      allow read: if true;
+      allow create: if request.auth != null && validTrace(request.resource.data);
+      allow update, delete: if false;
+    }
+
     match /guestbook/{id} {
       allow read: if true;
 

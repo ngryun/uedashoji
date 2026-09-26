@@ -12,6 +12,7 @@
   ],
   "fieldOverrides": [
     { "collectionGroup": "visitorTraces", "fieldPath": "expiresAt", "ttl": true, "indexes": [] },
-    { "collectionGroup": "visitorTraces", "fieldPath": "points", "indexes": [] }
+    { "collectionGroup": "visitorTraces", "fieldPath": "points", "indexes": [] },
+    { "collectionGroup": "visitorTraces", "fieldPath": "name", "indexes": [] }
   ]
 }

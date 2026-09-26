@@ -100,7 +100,12 @@
   }
   #traceSettings { margin: 14px auto 0; max-width: 560px; font-size: 12px; line-height: 1.7; color: #ccc6bc; }
   #traceSettings label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
-  #traceSettings input { accent-color: #b4a391; width: 17px; height: 17px; }
+  #traceSettings input[type="checkbox"] { accent-color: #b4a391; width: 17px; height: 17px; }
+  #traceSettings .traceName { display: flex; justify-content: center; margin-top: 8px; cursor: text; }
+  #traceSettings input[type="text"] { width: 168px; padding: 5px 9px; border: 1px solid rgba(255,255,255,.22);
+    border-radius: 6px; background: rgba(255,255,255,.06); color: #eee8df; font: inherit; font-size: 12px; }
+  #traceSettings input[type="text"]::placeholder { color: #8f887e; }
+  #traceSettings input[type="text"]:focus { outline: none; border-color: #b4a391; }
   #traceSettings p { margin-top: 5px; }
   #traceStatus { position: fixed; left: 16px; top: calc(58px + env(safe-area-inset-top)); z-index: 12;
     max-width: min(440px, calc(100vw - 32px)); padding: 7px 10px; border-radius: 8px;
@@ -350,7 +355,10 @@
   </div>
   <div id="traceSettings">
     <label><input id="traceToggle" type="checkbox" checked aria-describedby="traceNotice">내 발자국 남기기 · <span lang="ja">自分の足跡を残す</span></label>
-    <p id="traceNotice">걸음이 이름 없는 발자국으로 60일 동안 남습니다.<br><span lang="ja">歩いた跡が、名前のない足跡として60日間残ります。</span></p>
+    <label class="traceName">별명 · <span lang="ja">ニックネーム</span>
+      <input id="traceName" type="text" maxlength="8" autocomplete="nickname" spellcheck="false"
+        placeholder="비워 두면 날짜만 · 空欄なら日付だけ" aria-describedby="traceNotice"></label>
+    <p id="traceNotice">걸음이 발자국으로 60일 동안 남고, 발자국 끝에 날짜가 표시됩니다. 별명을 쓰면 별명도 함께 공개됩니다.<br><span lang="ja">歩いた跡が足跡として60日間残り、足跡の先に日付が表示されます。ニックネームを入れると、ニックネームも一緒に公開されます。</span></p>
   </div>
   <div id="loadNote" role="status" aria-live="polite">미술관을 준비하는 중… · 美術館を準備しています…</div>
 </main>

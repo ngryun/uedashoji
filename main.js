@@ -3,7 +3,8 @@
 import * as THREE from 'three';
 import * as Social from './social.js';
 import { SECRET_QUIZ, REWARD_VIDEO } from './quiz-data.js';
-import { createVisitorTraces, tracePreference, saveTracePreference } from './visitor-traces.js';
+import { createVisitorTraces, tracePreference, saveTracePreference, traceName, saveTraceName, cleanTraceName }
+  from './visitor-traces.js';
 import { createGuestbookScreen } from './guestbook-screen.js';
 import { createLobbyFinish } from './lobby-atmosphere.js';
 import { createDaisenLandscape } from './daisen-landscape.js';
@@ -2019,11 +2020,14 @@ if (IS_TOUCH) {
 let tracePreferences;
 try { tracePreferences = localStorage; } catch {}
 let tracesEnabled = tracePreference(tracePreferences);
+let traceNickname = traceName(tracePreferences);
 const traceToggle = document.getElementById('traceToggle');
+const traceNameInput = document.getElementById('traceName');
 const traceHudBtn = document.getElementById('traceHudBtn');
 const traceStatus = document.getElementById('traceStatus');
 function updateTraceUI() {
   traceToggle.checked = tracesEnabled;
+  if (document.activeElement !== traceNameInput) traceNameInput.value = traceNickname;
   traceHudBtn.setAttribute('aria-pressed', String(tracesEnabled));
   traceHudBtn.textContent = tracesEnabled ? '발자국 켜짐 · 足跡 ON' : '발자국 꺼짐 · 足跡 OFF';
 }
@@ -2038,7 +2042,13 @@ function setTracesEnabled(value) {
   tracesEnabled = value; saveTracePreference(tracePreferences, value);
   visitorTraces?.setEnabled(value); updateTraceUI();
 }
+function setTraceName(value) {
+  traceNickname = cleanTraceName(value); saveTraceName(tracePreferences, traceNickname);
+  visitorTraces?.setName(traceNickname);
+}
 traceToggle.addEventListener('change', () => setTracesEnabled(traceToggle.checked));
+traceNameInput.addEventListener('input', () => setTraceName(traceNameInput.value));
+traceNameInput.addEventListener('blur', () => { traceNameInput.value = traceNickname; });
 traceHudBtn.addEventListener('click', event => {
   event.stopPropagation(); setTracesEnabled(!tracesEnabled);
 });
@@ -2047,10 +2057,14 @@ window.addEventListener('storage', event => {
     tracesEnabled = tracePreference(tracePreferences);
     visitorTraces?.setEnabled(tracesEnabled); updateTraceUI();
   }
+  if (event.key === 'guest.traces.name.v1' || event.key === null) {
+    traceNickname = traceName(tracePreferences);
+    visitorTraces?.setName(traceNickname); updateTraceUI();
+  }
 });
+// 탭이 숨겨지면 구독만 멈춘다. 형성 중인 발자국은 돌아왔을 때 이어진다.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) visitorTraces?.suspend();
-  else visitorTraces?.reset();
 });
 window.addEventListener('pagehide', () => visitorTraces?.suspend());
 updateTraceUI();
@@ -3071,8 +3085,8 @@ async function init() {
     let traceStorage;
     try { traceStorage = sessionStorage; } catch {}
     visitorTraces = createVisitorTraces({ rooms, mobile: IS_TOUCH, storage: traceStorage,
-      social: Social, enabled: tracesEnabled, onStatus: updateTraceStatus });
-    scene.add(visitorTraces.mesh);
+      social: Social, enabled: tracesEnabled, name: traceNickname, onStatus: updateTraceStatus });
+    scene.add(visitorTraces.mesh, visitorTraces.labels);
     // 시각 검수용: ?preview=video, day2-stair, secret-projection으로 시작 위치를 바꾼다.
     const preview = new URLSearchParams(location.search).get('preview');
     if (preview === 'video') {

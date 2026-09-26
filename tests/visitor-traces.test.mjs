@@ -2,8 +2,8 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
-import { createTraceRecorder, visibleTraceSegments, validTrace, traceLayout,
-  tracePreference, saveTracePreference, TRACE_LIFETIME } from '../visitor-traces.js';
+import { createTraceRecorder, visibleTraceSegments, validTrace, traceLayout, tracePreference,
+  saveTracePreference, cleanTraceName, traceName, saveTraceName, traceLabel, TRACE_LIFETIME } from '../visitor-traces.js';
 
 const storage = () => { const values = new Map(); return {
   getItem: k => values.get(k), setItem: (k, v) => values.set(k, v),
@@ -11,10 +11,10 @@ const storage = () => { const values = new Map(); return {
 const rooms = [{ floor: 0, elevation: 0, W: 16, zFrom: 14, zTo: -100 },
   { floor: 1, elevation: 5.2, W: 16, zFrom: 14, zTo: -100 }];
 const layout = traceLayout(rooms);
-function setup(shared = storage()) {
+function setup(shared = storage(), name = () => '') {
   let time = 100000;
   const segments = [];
-  const recorder = createTraceRecorder({ storage: shared, layout, id: () => 'visit',
+  const recorder = createTraceRecorder({ storage: shared, layout, id: () => 'visit', name,
     now: () => time, onSegment: s => segments.push(s) });
   const walk = (start, end, room = 0, active = true) => {
     const sign = end > start ? 1 : -1;
@@ -50,18 +50,43 @@ test('room quotas survive reload; both time and distance separate the second seg
   again.walk(10, 6, 1); assert.equal(again.segments.length, 1);
 });
 
-test('pauses, jumps, stairs and automatic mode discard partial paths; teleport cannot connect', () => {
-  for (const reason of ['pause', 'jump', 'stairs', 'auto', 'hidden']) {
+test('a pause keeps the path being formed; moving while paused or teleporting discards it', () => {
+  for (const reason of ['viewer', 'esc', 'hidden']) {
     const s = setup(); s.walk(10, 8);
     assert.equal(s.recorder.pending.length, 3);
-    s.walk(8, 7, 0, false);
-    assert.equal(s.recorder.pending.length, 0, reason);
-    s.walk(7, 5); assert.equal(s.segments.length, 0, reason);
+    for (let i = 0; i < 50; i++) s.recorder.sample({ x: 0, z: 8 }, 0, false);
+    assert.equal(s.recorder.pending.length, 3, reason);
+    s.walk(8, 5); assert.equal(s.segments.length, 1, reason);
+  }
+  for (const reason of ['jump', 'stairs', 'auto']) {
+    const s = setup(); s.walk(10, 8);
+    s.walk(8, 6, 0, false);
+    assert.equal(s.recorder.pending.length, 3, reason);
+    s.walk(6, 5);
+    assert.equal(s.recorder.pending.length, 1, reason);
+    assert.equal(s.segments.length, 0, reason);
   }
   const s = setup(); s.walk(10, 8); s.walk(-40, -42);
   assert.equal(s.segments.length, 0);
   s.recorder.reset(); s.walk(-42, -44);
   assert.equal(s.segments.length, 0);
+});
+
+test('nickname is cleaned, capped at eight characters and stored only when present', () => {
+  assert.equal(cleanTraceName('  민준\t 남궁 '), '민준 남궁');
+  assert.equal(cleanTraceName('abcdefghijk'), 'abcdefgh');
+  assert.equal(cleanTraceName(['👨‍👩‍👧 x', 'y'].join(String.fromCharCode(0))), '👨‍👩‍👧 xy');
+  assert.equal(cleanTraceName(null), '');
+  let name = ' 민준 ';
+  const s = setup(storage(), () => name); s.walk(10, 6);
+  assert.equal(s.segments[0].name, '민준');
+  name = ''; s.setTime(200000); s.walk(0, -5);
+  assert.equal(s.segments.length, 2);
+  assert.equal('name' in s.segments[1], false);
+  assert.equal(traceLabel({ createdAt: new Date(2026, 8, 26, 10).getTime(), name: '민준' }), '민준 · 2026.9.26');
+  assert.equal(traceLabel({ createdAt: new Date(2026, 8, 26, 10).getTime() }), '2026.9.26');
+  const data = storage(); saveTraceName(data, ' 하늘 '); assert.equal(traceName(data), '하늘');
+  assert.equal(traceName(storage()), '');
 });
 
 test('standing still makes no steps; changing rooms does not join paths', () => {
@@ -93,6 +118,10 @@ test('expiry, room bounds, layout changes and malformed points are excluded', ()
     assert.equal(validTrace(s, rooms, layout, 100000), false);
   }
   assert.notEqual(traceLayout(rooms), traceLayout([{ ...rooms[0], zTo: -99 }, rooms[1]]));
+  assert.equal(validTrace({ ...segment('named'), name: '민준' }, rooms, layout, 100000), true);
+  for (const name of ['', ' 민준', 'abcdefghi', 3, null]) {
+    assert.equal(validTrace({ ...segment('bad-name'), name }, rooms, layout, 100000), false, String(name));
+  }
 });
 test('dense paths are omitted whole, own echo is deduplicated and display caps hold', () => {
   const a = segment('a'), b = segment('b', 0.1, 99999), c = segment('c', 2);
@@ -111,7 +140,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 function controller(t, adapter = {}) {
   const original = globalThis.document;
   globalThis.document = { createElement: () => ({ getContext: () => ({
-    beginPath() {}, ellipse() {}, fill() {},
+    beginPath() {}, ellipse() {}, fill() {}, clearRect() {}, fillText() {}, measureText: () => ({ width: 320 }),
   }) }) };
   t.after(() => { globalThis.document = original; });
   const watched = [], stopped = [], statuses = [];
@@ -144,8 +173,21 @@ test('failed writes keep local footsteps, do not retry, and opt-out discards uns
   assert.equal(attempts, 1); assert.equal(c.view.mesh.count, 6);
   assert.equal(c.statuses.at(-1), 'unavailable');
   c.view.setEnabled(false); c.tick(5); assert.equal(c.view.mesh.count, 0);
+  assert.equal(c.view.labels.children.filter(m => m.visible).length, 0);
   for (let z = 5; z > 0; z -= .1) c.tick(z);
   assert.equal(attempts, 1);
+});
+test('each drawn path gets one floor label just past its last step, carrying the chosen nickname', async t => {
+  let saved;
+  const c = controller(t, { saveVisitorTrace: async s => { saved = s; return true; } });
+  const visible = () => c.view.labels.children.filter(m => m.visible);
+  c.view.start(); await flush(); c.tick(10); assert.equal(visible().length, 0);
+  c.view.setName(' 민준 '); c.walk(); await flush(); c.tick(5.9);
+  assert.equal(saved.name, '민준'); assert.equal(visible().length, 1);
+  const label = visible()[0];
+  assert.ok(Math.abs(label.position.z - 5.6) < 0.02 && Math.abs(label.position.x) < 0.1);
+  assert.equal(label.rotation.order, 'YXZ');
+  c.view.setEnabled(false); c.tick(5.9); assert.equal(visible().length, 1, 'already sent steps keep their label');
 });
 test('opt-out cancels a write still awaiting its transaction read', async t => {
   let mayWrite, finish;

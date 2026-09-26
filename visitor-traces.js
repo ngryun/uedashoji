@@ -2,8 +2,11 @@ import * as THREE from './lib/three.module.js';
 
 export const TRACE_LIFETIME = 60 * 24 * 60 * 60 * 1000;
 export const TRACE_STEP = 0.65;
+export const TRACE_NAME_MAX = 8;
 const PREF_KEY = 'guest.traces.enabled.v1';
+const NAME_KEY = 'guest.traces.name.v1';
 const SESSION_KEY = 'guest.traces.visit.v1';
+const LABEL_FONT = '"Apple SD Gothic Neo","Hiragino Kaku Gothic ProN","Noto Sans KR","Noto Sans JP",sans-serif';
 const distance = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const read = (storage, key, fallback) => {
   try { return JSON.parse(storage?.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -14,6 +17,21 @@ const write = (storage, key, value) => {
 export function tracePreference(storage) { return read(storage, PREF_KEY, true) !== false; }
 export function saveTracePreference(storage, enabled) { write(storage, PREF_KEY, enabled); }
 
+// The nickname is the only visitor-typed text on the floor: optional, short and printable.
+export function cleanTraceName(value) {
+  const text = String(value ?? '').replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, '').replace(/\s+/g, ' ').trim();
+  return [...text].slice(0, TRACE_NAME_MAX).join('');
+}
+const validTraceName = value => typeof value === 'string' && value.length > 0 && value === cleanTraceName(value);
+export function traceName(storage) { return cleanTraceName(read(storage, NAME_KEY, '')); }
+export function saveTraceName(storage, value) { write(storage, NAME_KEY, cleanTraceName(value)); }
+// Both schools share UTC+9, so the viewer's local date is the date everyone expects to see.
+export function traceLabel(segment) {
+  const date = new Date(segment.createdAt);
+  const day = `${date.getFullYear()}.${date.getMonth() + 1}.${date.getDate()}`;
+  return segment.name ? `${segment.name} · ${day}` : day;
+}
+
 // Include geometry in the version so manifest changes cannot leave tracks inside new walls.
 export function traceLayout(rooms) {
   const value = JSON.stringify(rooms.map(r => [r.floor, r.W, r.zFrom, r.zTo]));
@@ -22,7 +40,8 @@ export function traceLayout(rooms) {
   return `traces-v1-${(hash >>> 0).toString(16)}`;
 }
 
-export function createTraceRecorder({ storage, layout, onSegment, now = Date.now, id = () => crypto.randomUUID() }) {
+export function createTraceRecorder({ storage, layout, onSegment, now = Date.now, id = () => crypto.randomUUID(),
+  name = () => '' }) {
   let visit = read(storage, SESSION_KEY, null);
   if (!visit || visit.layout !== layout || typeof visit.id !== 'string' || !visit.rooms
       || typeof visit.rooms !== 'object' || Array.isArray(visit.rooms)) {
@@ -36,7 +55,9 @@ export function createTraceRecorder({ storage, layout, onSegment, now = Date.now
     get pending() { return points; },
     get pendingRoom() { return room; },
     sample(position, roomId, active) {
-      if (!active) { reset(); return; }
+      // A pause keeps the path being formed, so a look at a photo does not erase it. Moving
+      // while not recording (jumps, stairs, automatic tours) trips the discontinuity check below.
+      if (!active) return;
       if (roomId !== room) { reset(); room = roomId; }
       const p = { x: position.x, z: position.z };
       if (!previous) { previous = p; return; }
@@ -57,9 +78,9 @@ export function createTraceRecorder({ storage, layout, onSegment, now = Date.now
           z: previous.z + dz * offset + dx * side, angle: Math.atan2(-dx, -dz) });
         travelled = travelled + length - TRACE_STEP;
         if (points.length === 6) {
-          const createdAt = now();
+          const createdAt = now(), nickname = cleanTraceName(name());
           const segment = { id: `${visit.id}-${roomId}-${state.count}`, room: roomId, layout,
-            points, createdAt, expiresAt: createdAt + TRACE_LIFETIME };
+            points, createdAt, expiresAt: createdAt + TRACE_LIFETIME, ...(nickname ? { name: nickname } : {}) };
           // Reserve the slot before starting a write: reloads and failures cannot amplify writes.
           visit.rooms[roomId] = { count: state.count + 1, at: createdAt, last: p };
           write(storage, SESSION_KEY, visit);
@@ -75,7 +96,8 @@ export function createTraceRecorder({ storage, layout, onSegment, now = Date.now
 export function validTrace(segment, rooms, layout, now = Date.now()) {
   if (!segment || typeof segment.id !== 'string') return false;
   const r = rooms[segment.room];
-  return !!r && segment.layout === layout && Number.isFinite(segment.createdAt)
+  return !!r && segment.layout === layout && (!('name' in segment) || validTraceName(segment.name))
+    && Number.isFinite(segment.createdAt)
     && segment.createdAt <= now + 300000 && segment.createdAt > now - TRACE_LIFETIME
     && Number.isFinite(segment.expiresAt) && segment.expiresAt > now
     && Array.isArray(segment.points) && segment.points.length === 6
@@ -141,22 +163,73 @@ function makeRenderer(limit) {
       };
       // Keep the newly forming local path visible, even at the display cap.
       if (pending.length && rooms[pendingRoom]) draw(pending, pendingRoom, 0.26);
+      const drawn = [];
       for (const s of segments) {
         if (index + 6 > limit) break;
         draw(s.points, s.room, 0.26 * Math.max(0, 1 - (now - s.createdAt) / TRACE_LIFETIME));
+        drawn.push(s);
       }
       mesh.count = index; mesh.instanceMatrix.needsUpdate = true; alpha.needsUpdate = true; mirror.needsUpdate = true;
+      return drawn;
     },
     dispose() { geometry.dispose(); material.dispose(); texture.dispose(); },
   };
 }
 
-export function createVisitorTraces({ rooms, mobile, storage, social, enabled = true, onStatus = () => {} }) {
+// One small floor label per drawn path: the nickname (if any) and the date, just past the sixth step.
+function makeLabelRenderer(slots) {
+  const group = new THREE.Group(); group.name = 'visitor-footprint-labels';
+  const geometry = new THREE.PlaneGeometry(1.4, 0.28);
+  const labels = Array.from({ length: slots }, () => {
+    const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 128;
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.MeshBasicMaterial({ color: 0x4e463f, map: texture, transparent: true,
+      opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+      toneMapped: false });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.rotation.order = 'YXZ'; mesh.visible = false; mesh.raycast = () => {};
+    group.add(mesh);
+    return { canvas, texture, material, mesh, text: '' };
+  });
+  const paint = (label, text) => {
+    if (label.text === text) return;
+    label.text = text;
+    const ctx = label.canvas.getContext('2d');
+    ctx.clearRect(0, 0, 640, 128);
+    ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    let size = 58;
+    ctx.font = `600 ${size}px ${LABEL_FONT}`;
+    const width = ctx.measureText(text).width;
+    if (width > 600) { size = Math.max(24, Math.floor(size * 600 / width)); ctx.font = `600 ${size}px ${LABEL_FONT}`; }
+    ctx.fillText(text, 320, 66);
+    label.texture.needsUpdate = true;
+  };
+  return { group,
+    draw(segments, rooms, now) {
+      let i = 0;
+      for (; i < segments.length && i < slots; i++) {
+        const s = segments[i], last = s.points[5], label = labels[i];
+        paint(label, traceLabel(s));
+        // Half a metre beyond the last step, upright for anyone following the path.
+        label.mesh.position.set(last.x - Math.sin(last.angle) * 0.5, rooms[s.room].elevation + 0.009,
+          last.z - Math.cos(last.angle) * 0.5);
+        label.mesh.rotation.set(-Math.PI / 2, last.angle, 0);
+        label.material.opacity = 0.6 * Math.max(0, 1 - (now - s.createdAt) / TRACE_LIFETIME);
+        label.mesh.visible = true;
+      }
+      for (; i < slots; i++) labels[i].mesh.visible = false;
+    },
+    dispose() { geometry.dispose(); for (const label of labels) { label.material.dispose(); label.texture.dispose(); } },
+  };
+}
+
+export function createVisitorTraces({ rooms, mobile, storage, social, enabled = true, name = '', onStatus = () => {} }) {
   const layout = traceLayout(rooms), limit = mobile ? 72 : 144;
-  const renderer = makeRenderer(limit), own = new Map(), remote = new Map(), watches = new Map();
+  const renderer = makeRenderer(limit), labels = makeLabelRenderer(limit / 6);
+  const own = new Map(), remote = new Map(), watches = new Map();
   const failedRooms = new Set();
   let roomIds = [], started = false, ready = false, disposed = false, lastDraw = 0;
-  let online = false, writingFailed = false, generation = 0;
+  let online = false, writingFailed = false, generation = 0, nickname = cleanTraceName(name);
   const unsent = new Set();
   const status = () => onStatus(writingFailed || failedRooms.size ? 'unavailable' : online ? 'shared' : 'local');
   const send = segment => {
@@ -170,7 +243,7 @@ export function createVisitorTraces({ rooms, mobile, storage, social, enabled = 
       writingFailed = true; status();
     });
   };
-  const recorder = createTraceRecorder({ storage, layout, onSegment(segment) {
+  const recorder = createTraceRecorder({ storage, layout, name: () => nickname, onSegment(segment) {
     if (!validTrace(segment, rooms, layout)) return;
     own.set(segment.id, segment);
     if (online && enabled) send(segment);
@@ -192,12 +265,15 @@ export function createVisitorTraces({ rooms, mobile, storage, social, enabled = 
   };
   return {
     mesh: renderer.mesh,
+    labels: labels.group,
     reset: recorder.reset,
+    setName(value) { nickname = cleanTraceName(value); },
     setEnabled(value) {
       enabled = value; generation++; recorder.reset();
       if (!value) { for (const id of unsent) own.delete(id); unsent.clear(); }
     },
-    suspend() { recorder.reset(); roomIds = []; sync(); },
+    // A hidden tab cannot move, so the path being formed waits for the tab to return.
+    suspend() { roomIds = []; sync(); },
     start() {
       if (started) return;
       started = true;
@@ -224,8 +300,11 @@ export function createVisitorTraces({ rooms, mobile, storage, social, enabled = 
       const merged = new Map(own);
       for (const entries of remote.values()) for (const s of entries) merged.set(s.id, s);
       const selected = visibleTraceSegments([...merged.values()], { rooms, layout, roomIds, limit, now: time });
-      renderer.draw(selected, rooms, recorder.pending, recorder.pendingRoom, time);
+      labels.draw(renderer.draw(selected, rooms, recorder.pending, recorder.pendingRoom, time), rooms, time);
     },
-    dispose() { disposed = true; for (const stop of watches.values()) stop(); watches.clear(); renderer.dispose(); },
+    dispose() {
+      disposed = true; for (const stop of watches.values()) stop(); watches.clear();
+      renderer.dispose(); labels.dispose();
+    },
   };
 }

@@ -221,7 +221,7 @@ export async function updateGuestbookEntry(id, { name, school, message, badge })
   return { id, ...clean, badge: badgeVal, editedAt: Date.now(), editable: true };
 }
 
-/* ── 이름 없는 방문 발자국: 방명록 작성자 정보와 연결하지 않는다. ── */
+/* ── 방문 발자국: 방문자가 직접 적은 별명만 담고, 방명록 작성자 정보와 연결하지 않는다. ── */
 export function canShareVisitorTraces() {
   return mode === 'firebase' && Boolean(fb?.authUser?.uid);
 }
@@ -229,14 +229,14 @@ export function canShareVisitorTraces() {
 export async function saveVisitorTrace(segment, shouldWrite = () => true) {
   if (!canShareVisitorTraces()) throw new Error('TRACE_SHARING_UNAVAILABLE');
   // Transactions fail offline rather than queuing an upload after recording was disabled.
-  // No owner ID, visitor name or school is stored in the public trace document.
-  const { id, room, layout, points } = segment;
+  // Only the optional nickname the visitor typed is stored: no owner ID, guestbook name or school.
+  const { id, room, layout, points, name } = segment;
   const ref = fb.doc(fb.db, 'visitorTraces', id);
   return fb.runTransaction(fb.db, async transaction => {
     const existing = await transaction.get(ref);
     if (existing.exists()) return true;
     if (!shouldWrite()) return false;
-    transaction.set(ref, { room, layout, points, createdAt: fb.serverTimestamp(),
+    transaction.set(ref, { room, layout, points, ...(name ? { name } : {}), createdAt: fb.serverTimestamp(),
       expiresAt: fb.Timestamp.fromMillis(Date.now() + 60 * 86400000) });
     return true;
   }, { maxAttempts: 2 });

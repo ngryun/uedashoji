@@ -36,6 +36,7 @@ test('Firestore trace rules accept shared anonymous walks and reject invalid wri
       return { status: response.status, body: await response.text(), id };
     };
     const good = await write(base()); assert.equal(good.status, 200, good.body);
+    const named = await write({ ...base(), name: '민준' }); assert.equal(named.status, 200, named.body);
     const read = await fetch(`${url}/visitorTraces/${good.id}`); assert.equal(read.status, 200);
     const saved = await read.json(); assert.equal(saved.fields.points.arrayValue.values.length, 6);
     assert.equal(saved.fields.ownerId, undefined);
@@ -46,7 +47,8 @@ test('Firestore trace rules accept shared anonymous walks and reject invalid wri
       { ...base(), points: base().points.map(p => ({ ...p, angle: 4 })) },
       { ...base(), points: base().points.map((p, i) => i === 3 ? { ...p, z: -30 } : p) },
       { ...base(), room: 7 }, { ...base(), room: .5 }, { ...base(), layout: 'unknown' },
-      { ...base(), name: 'must not be stored' }, { ...base(), expiresAt: new Date(Date.now() - 1) },
+      { ...base(), name: '' }, { ...base(), name: 'x'.repeat(33) }, { ...base(), name: 5 },
+      { ...base(), school: 'must not be stored' }, { ...base(), expiresAt: new Date(Date.now() - 1) },
       { ...base(), expiresAt: new Date(Date.now() + lifetime + 86400000) },
     ];
     for (const data of bads) { const result = await write(data); assert.equal(result.status, 403, result.body); }

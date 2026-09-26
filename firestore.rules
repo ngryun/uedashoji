@@ -30,9 +30,15 @@ service cloud.firestore {
     function adjacentTracePoints(a, b) {
       return (a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z) <= 1;
     }
+    // The optional nickname is the only visitor-typed text; the client displays at most eight characters.
+    function validTraceName(data) {
+      return !('name' in data)
+        || (data.name is string && data.name.size() >= 1 && data.name.size() <= 32);
+    }
     function validTrace(data) {
-      return data.keys().hasOnly(['room', 'layout', 'points', 'createdAt', 'expiresAt'])
+      return data.keys().hasOnly(['room', 'layout', 'points', 'createdAt', 'expiresAt', 'name'])
         && data.keys().hasAll(['room', 'layout', 'points', 'createdAt', 'expiresAt'])
+        && validTraceName(data)
         && data.room is int && data.room >= 0 && data.room <= 6
         && data.layout is string && data.layout.matches('traces-v1-[0-9a-f]{1,8}')
         && data.points is list && data.points.size() == 6

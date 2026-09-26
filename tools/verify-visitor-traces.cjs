@@ -31,6 +31,7 @@ fs.mkdirSync(output, { recursive: true });
     await fetch('http://127.0.0.1:8085/emulator/v1/projects/demo-ueda-traces/databases/(default)/documents', { method: 'DELETE' });
     const a = await makePage();
     await a.screenshot({ path: path.join(output, 'ueda-traces-start.png') });
+    await a.fill('#traceName', '검수');
     await a.click('#enterBtn');
     await a.evaluate(async () => { const social = await import('/social.js'); await social.initSocial(); if (!social.canShareVisitorTraces()) throw Error('Emulator auth failed'); });
     // Start away from the central mascot and benches, then walk with real keyboard input.
@@ -43,12 +44,14 @@ fs.mkdirSync(output, { recursive: true });
     await a.evaluate(() => { const m = window.__m; m.player.yaw = Math.PI; m.player.pitch = -.7; });
     await a.waitForTimeout(1000);
     await a.screenshot({ path: path.join(output, 'ueda-traces-desktop.png') });
-    const before = await a.evaluate(() => ({ count: __m.visitorTraces.mesh.count, visit: JSON.parse(sessionStorage.getItem('guest.traces.visit.v1')), status: document.querySelector('#traceStatus').textContent }));
+    const before = await a.evaluate(() => ({ count: __m.visitorTraces.mesh.count, visit: JSON.parse(sessionStorage.getItem('guest.traces.visit.v1')), status: document.querySelector('#traceStatus').textContent,
+      label: __m.visitorTraces.labels.children.some(m => m.visible) }));
     const savedUrl = `http://127.0.0.1:8085/v1/projects/demo-ueda-traces/databases/(default)/documents/visitorTraces/${before.visit.id}-0-0`;
     let saved = false;
     for (let attempt = 0; attempt < 100 && !saved; attempt++) {
       const response = await fetch(savedUrl);
-      saved = response.ok && Boolean((await response.json()).fields?.points);
+      const fields = response.ok ? (await response.json()).fields : null;
+      saved = Boolean(fields?.points) && fields?.name?.stringValue === '검수';
       if (!saved) await new Promise(resolve => setTimeout(resolve, 100));
     }
     if (!saved) throw Error('The walk was not committed to the emulator');
@@ -81,6 +84,6 @@ fs.mkdirSync(output, { recursive: true });
     assert.ok(await b.locator('#traceToggle').isVisible());
     assert.equal(await b.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     console.log(JSON.stringify({ before, shared, preference, galleryAndGuestbook: 'passed', smallScreen: 'passed', errors }));
-    if (errors.length || shared.count < 6 || preference || shared.horizontalOverflow || shared.hudOverlapsFloor) process.exitCode = 1;
+    if (errors.length || shared.count < 6 || !before.label || preference || shared.horizontalOverflow || shared.hudOverlapsFloor) process.exitCode = 1;
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

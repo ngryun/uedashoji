@@ -28,8 +28,8 @@ function startScreenWatch() {
 }
 
 /* ═══════════════════ 상수 ═══════════════════ */
-const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0
-  || location.search.includes('touch=1');
+const IS_TOUCH = location.search.includes('touch=1')
+  || navigator.maxTouchPoints > 0;
 const EYE = 1.7;              // 눈높이 (m)
 const RADIUS = 0.38;          // 플레이어 충돌 반경
 const WALK = 4.2, RUN = 8.4;  // 이동 속도 (m/s)
@@ -1880,11 +1880,17 @@ for (const button of floorNavEl.querySelectorAll('button')) {
 }
 
 function lockPointer() {
+  const fallback = () => {
+    if (controlsActive && !autoTour.active) {
+      showHint('마우스를 누른 채 드래그하면 시점이 움직입니다<br>マウスを押したままドラッグすると視点が動きます');
+    }
+  };
   try {
     const request = renderer.domElement.requestPointerLock();
-    if (request && typeof request.catch === 'function') request.catch(() => {});
+    if (request && typeof request.catch === 'function') request.catch(fallback);
   } catch {
     // 지원하지 않는 환경에서는 아래의 마우스 드래그 폴백을 사용한다.
+    fallback();
   }
 }
 
@@ -1906,19 +1912,25 @@ document.addEventListener('pointerlockchange', () => {
   }
 });
 document.addEventListener('mousemove', (e) => {
-  if (!renderer || document.pointerLockElement !== renderer.domElement) return;
+  if (!controlsActive || !renderer || document.pointerLockElement !== renderer.domElement) return;
   player.yaw -= e.movementX * 0.0022;
   player.pitch -= e.movementY * 0.0022;
   player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch));
 });
 /* 포인터 락이 안 되는 환경 폴백: 드래그로 시점 회전 */
-const drag = { on: false, x: 0, y: 0, moved: 0 };
-renderer?.domElement.addEventListener('mousedown', (e) => {
-  if (IS_TOUCH || document.pointerLockElement || !controlsActive) return;
-  drag.on = true; drag.x = e.clientX; drag.y = e.clientY; drag.moved = 0;
+const drag = { on: false, id: null, x: 0, y: 0, moved: 0 };
+renderer?.domElement.addEventListener('pointerdown', (e) => {
+  // 터치 UI가 표시되는 기기에서도 실제 마우스 입력은 사용할 수 있다.
+  if (e.pointerType !== 'mouse' || e.button !== 0 || document.pointerLockElement || !controlsActive) return;
+  drag.on = true; drag.id = e.pointerId;
+  drag.x = e.clientX; drag.y = e.clientY; drag.moved = 0;
 });
-window.addEventListener('mousemove', (e) => {
-  if (!drag.on) return;
+window.addEventListener('pointermove', (e) => {
+  if (!drag.on || e.pointerId !== drag.id) return;
+  if (!controlsActive || document.pointerLockElement || !(e.buttons & 1)) {
+    drag.on = false; drag.id = null;
+    return;
+  }
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.moved += Math.abs(dx) + Math.abs(dy);
   if (autoTour.active && drag.moved > 24) stopAutoTour(); // 시점 조작 → 자동 관람 해제
@@ -1927,10 +1939,15 @@ window.addEventListener('mousemove', (e) => {
   player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch));
   drag.x = e.clientX; drag.y = e.clientY;
 });
-window.addEventListener('mouseup', (e) => {
+window.addEventListener('pointerup', (e) => {
+  if (!drag.on || e.pointerId !== drag.id) return;
   if (drag.on && drag.moved < 6 && controlsActive) tryViewAt(e.clientX, e.clientY);
-  drag.on = false;
+  drag.on = false; drag.id = null;
 });
+window.addEventListener('pointercancel', (e) => {
+  if (e.pointerId === drag.id) { drag.on = false; drag.id = null; }
+});
+window.addEventListener('blur', () => { drag.on = false; drag.id = null; });
 
 /* 모바일: 조이스틱 + 시점 드래그 + 버튼 */
 const joy = { active: false, id: null, cx: 0, cy: 0, dx: 0, dy: 0 };
@@ -2815,7 +2832,7 @@ function tryViewAt(sx, sy) {
   else if (hits.length) openViewer(hits[0].object.userData.art);
 }
 renderer?.domElement.addEventListener('click', () => {
-  if (!IS_TOUCH && document.pointerLockElement === renderer.domElement) {
+  if (controlsActive && document.pointerLockElement === renderer.domElement) {
     tryViewAt(window.innerWidth / 2, window.innerHeight / 2);
   }
 });

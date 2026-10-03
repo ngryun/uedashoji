@@ -154,4 +154,5 @@ mv "$manifest_tmp" "$MANIFEST"
 rm -f "$items_tmp"
 trap - EXIT
 echo "manifest: ${#json_items[@]} items"
+node "$SCRIPT_DIR/mobile-videos.mjs"
 echo "DONE"

@@ -60,6 +60,7 @@ http.createServer((req, res) => {
     || pathname === '/guestbook-screen.js' || pathname === '/visitor-traces.js'
     || pathname === '/lobby-atmosphere.js'
     || pathname === '/daisen-landscape.js'
+    || pathname === '/cinema-playback.js'
     || pathname === '/quiz-data.js' || pathname === '/manifest.json'
     || pathname.startsWith('/lib/')
     || (pathname.startsWith('/assets/') && !pathname.startsWith('/assets/.source-map/'));

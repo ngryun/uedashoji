@@ -2,12 +2,13 @@
 // Three.js 1인칭 미술관. WASD/SHIFT/SPACE + 모바일 터치 조작.
 import * as THREE from 'three';
 import * as Social from './social.js';
-import { SECRET_QUIZ, REWARD_VIDEO } from './quiz-data.js';
+import { SECRET_QUIZ, REWARD_VIDEO, REWARD_MOBILE_VIDEO } from './quiz-data.js';
 import { createVisitorTraces, tracePreference, saveTracePreference, traceName, saveTraceName, cleanTraceName }
   from './visitor-traces.js';
 import { createGuestbookScreen } from './guestbook-screen.js';
 import { createLobbyFinish } from './lobby-atmosphere.js';
 import { createDaisenLandscape } from './daisen-landscape.js';
+import { createCinemaPlayback, createCinemaScreen, prepareCinemaVideo, cinemaVideoSource } from './cinema-playback.js';
 
 let guestbookScreen = null;
 let visitorTraces = null;
@@ -733,8 +734,8 @@ function buildStaircase(stair) {
 // 사진은 느린 줌(켄 번스)과 페이드, 영상은 중간 10초만 재생한다.
 let cinemaCtl = null;   // 슬라이드쇼 컨트롤러
 let cinemaInfo = null;  // {cz, screenX, screenY, viewX, roomIdx} — 자동 관람 경로용
-const CINEMA_MIRROR = true;   // 서쪽 벽 스크린은 좌우 반전되어 보이므로 되돌린다
-const CINEMA_MAX_TEX = IS_TOUCH ? 640 : 1024;
+const CINEMA_MIRROR = false;  // 앞면을 바라보는 스크린 회전은 원본의 좌우를 바꾸지 않는다.
+const CINEMA_MAX_TEX = IS_TOUCH ? 1024 : 1600;
 
 // 비밀의 방을 완주한 브라우저에만 나타나는 동쪽 벽 프로젝션.
 // 영상 파일은 세로형이므로 실제 메타데이터 비율에 맞춰 높이를 고정하고 폭을 조절한다.
@@ -786,7 +787,7 @@ function buildSecretProjection(def, cz) {
 
   const viewerArt = {
     isVideo: true,
-    item: { type: 'video', file: REWARD_VIDEO },
+    item: { type: 'video', file: REWARD_VIDEO, mobileFile: REWARD_MOBILE_VIDEO },
     specialLabel: '비밀의 방 특별영상 · 秘密の部屋 特別映像',
     video: null,
   };
@@ -827,7 +828,7 @@ function buildSecretProjection(def, cz) {
       video.playsInline = true;
       video.preload = 'auto';
       video.crossOrigin = 'anonymous';
-      video.src = REWARD_VIDEO;
+      video.src = cinemaVideoSource(viewerArt.item, IS_TOUCH);
       video.addEventListener('loadedmetadata', () => {
         if (this.video === video) this.fit(video.videoWidth / video.videoHeight);
       }, { once: true });
@@ -994,176 +995,65 @@ function buildCinema(def, roomGroup) {
   }
 
   cinemaInfo = { cz, screenX, screenY, viewX: 2.4, roomIdx: rooms.length,
-    screen: new THREE.Vector3(screenX, screenY, cz) };
+    screen: new THREE.Vector3(screenX, screenY, cz), screenBase };
 
-  /* ── 슬라이드쇼 컨트롤러 ── */
-  const FADE = 0.9;
-  const HOLD_PHOTO = 5.5, PLAY_VIDEO = 10;
-  cinemaCtl = {
-    items: def.items.slice(),
-    i: -1, screen, spill, yBase,
-    tex: null, video: null, vtex: null,
-    pending: null,          // 프리페치된 다음 슬라이드
-    phase: 'idle',          // idle | loading | in | hold | out
-    t: 0, hold: 0, prefetched: false,
-    near: false, wasNear: false,
-
-    setScreenTex(tex, mirror) {
-      // 좌우 반전 보정 (서쪽 벽 스크린)
-      if (mirror && CINEMA_MIRROR) { tex.wrapS = THREE.ClampToEdgeWrapping; tex.repeat.x = -1; tex.offset.x = 1; }
-      screen.material.map = tex;
-      screen.material.color.setHex(0xffffff);
-      screen.material.needsUpdate = true;
-    },
-
-    loadPhoto(item, cb) {
+  const cinemaScreen = createCinemaScreen(THREE, {
+    screen, spill, width: screenW, height: screenH, mirror: CINEMA_MIRROR,
+  });
+  async function loadSlot(item, signal) {
+    if (item.type === 'video') {
+      let video = document.createElement('video');
+      const src = cinemaVideoSource(item, IS_TOUCH);
+      let meta;
+      try { meta = await prepareCinemaVideo(video, src, signal); }
+      catch (error) {
+        if (signal.aborted || src === item.file) throw error;
+        video = document.createElement('video');
+        meta = await prepareCinemaVideo(video, item.file, signal);
+      }
+      const vtex = new THREE.VideoTexture(video); vtex.colorSpace = THREE.SRGBColorSpace;
+      return { type: 'video', video, vtex, ...meta };
+    }
+    return new Promise((resolve, reject) => {
       const img = new Image();
+      const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); img.onload = img.onerror = null; };
+      const fail = error => { cleanup(); img.src = ''; reject(error); };
+      const abort = () => fail(new DOMException('Cancelled', 'AbortError'));
+      const timer = setTimeout(() => fail(new Error('Photo preparation timed out')), 15000);
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) { abort(); return; }
       img.onload = () => {
+        cleanup();
         const ratio = Math.min(1, CINEMA_MAX_TEX / Math.max(img.width, img.height));
-        const iw = Math.round(img.width * ratio), ih = Math.round(img.height * ratio);
         const cv = document.createElement('canvas');
-        cv.width = iw; cv.height = ih;
-        const g = cv.getContext('2d');
-        g.fillStyle = '#000'; g.fillRect(0, 0, iw, ih);
-        g.drawImage(img, 0, 0, iw, ih);
+        cv.width = Math.round(img.width * ratio); cv.height = Math.round(img.height * ratio);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
         const tex = new THREE.CanvasTexture(cv);
         tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-        tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-        // 화면비에 맞춰 플레인 스케일 (레터박스)
-        cb({ type: 'photo', tex, aspect: iw / ih });
+        resolve({ type: 'photo', tex, aspect: cv.width / cv.height });
       };
-      img.onerror = () => cb(null);
+      img.onerror = () => fail(new Error('Photo unavailable'));
       img.src = item.file || item.thumb;
-    },
-
-    loadVideo(item, cb) {
-      const v = document.createElement('video');
-      v.src = item.file; v.muted = true; v.loop = true; v.playsInline = true;
-      v.preload = 'auto'; v.crossOrigin = 'anonymous';
-      let done = false;
-      const ready = () => {
-        if (done) return; done = true;
-        const vtex = new THREE.VideoTexture(v);
-        vtex.colorSpace = THREE.SRGBColorSpace;
-        cb({ type: 'video', video: v, vtex, aspect: (v.videoWidth || 16) / (v.videoHeight || 9) });
-      };
-      v.addEventListener('loadeddata', () => {
-        // 중간 지점에서 10초 재생
-        const mid = Math.max(0, (v.duration || 20) / 2 - PLAY_VIDEO / 2);
-        try { v.currentTime = mid; } catch (e) {}
-        ready();
-      }, { once: true });
-      v.addEventListener('error', () => { if (!done) { done = true; cb(null); } });
-    },
-
-    loadNext(cb) {
-      if (!this.items.length) { cb(null); return; }
-      this.i = (this.i + 1) % this.items.length;
-      const item = this.items[this.i];
-      (item.type === 'video' ? this.loadVideo : this.loadPhoto).call(this, item, cb);
-    },
-
-    fitScreen(aspect) {
-      // 스크린 프레임(16:9) 안에 레터박스로 맞춘다
-      const frameA = screenW / screenH;
-      let w = screenW, h = screenH;
-      if (aspect > frameA) h = screenW / aspect; else w = screenH * aspect;
-      screen.geometry.dispose();
-      screen.geometry = new THREE.PlaneGeometry(w, h);
-    },
-
-    install(slot) {
-      // 이전 리소스 해제
-      this.disposeCurrent();
-      if (slot.type === 'photo') {
-        this.tex = slot.tex;
-        this.setScreenTex(slot.tex, true);
-        this.kb = { r0: 1.0, r1: 0.9, px: (this.i % 3) * 0.06, py: ((this.i % 2) ? 0.08 : -0.06) };
-        this.hold = HOLD_PHOTO;
-      } else {
-        this.video = slot.video; this.vtex = slot.vtex;
-        this.setScreenTex(slot.vtex, true);
-        this.video.play().catch(() => {});
-        this.kb = null;
-        this.hold = PLAY_VIDEO;
-      }
-      this.fitScreen(slot.aspect);
-      // 반전 보정은 setScreenTex에서 offset.x/repeat.x를 건드리므로 KB 기준값 저장
-      const t = this.screen.material.map;
-      this.kbBase = { rx: t.repeat.x, ry: t.repeat.y, ox: t.offset.x, oy: t.offset.y };
-      this.phase = 'in'; this.t = 0; this.prefetched = false;
-    },
-
-    applyKenBurns(p) {
-      if (!this.kb || !this.tex) return;
-      const t = this.tex;
-      const r = this.kb.r0 + (this.kb.r1 - this.kb.r0) * p;
-      const sign = (this.kbBase.rx < 0) ? -1 : 1;   // 반전 스크린 보정 유지
-      t.repeat.set(sign * r, r);
-      t.offset.set((sign < 0 ? 1 : 0) + (sign < 0 ? -1 : 1) * ((1 - r) / 2 + this.kb.px * p),
-                   (1 - r) / 2 + this.kb.py * p);
-      // repeat/offset은 텍스처 매트릭스로 자동 반영된다(needsUpdate 건드리면 최초 업로드가 취소됨).
-    },
-
-    disposeCurrent() {
-      if (this.video) { this.video.pause(); this.video.removeAttribute('src'); this.video.load(); this.video = null; }
-      if (this.vtex) { this.vtex.dispose(); this.vtex = null; }
-      if (this.tex) { this.tex.dispose(); this.tex = null; }
-    },
-
-    reset() {
-      this.disposeCurrent();
-      screen.material.opacity = 0; spill.material.opacity = 0;
-      this.phase = 'idle'; this.pending = null;
-    },
-
-    update(dt) {
-      // 근접 여부 (2층, 상영실 근처)
-      const near = player.floor === 1 &&
-        Math.abs(player.pos.z - cz) < L / 2 + 7 && Math.abs(player.pos.x) < W;
-      this.near = near;
-      if (!near) {
-        if (this.wasNear) this.reset();
-        this.wasNear = false;
-        return;
-      }
-      this.wasNear = true;
-
-      if (this.phase === 'idle') {
-        this.phase = 'loading';
-        this.loadNext((slot) => { if (slot && this.near) this.install(slot); else this.phase = 'idle'; });
-        return;
-      }
-      if (this.phase === 'loading') return; // 콜백에서 install → 'in'
-
-      this.t += dt;
-      if (this.phase === 'in') {
-        const p = Math.min(1, this.t / FADE);
-        screen.material.opacity = p;
-        spill.material.opacity = p * 0.42;
-        if (this.kb) this.applyKenBurns(0);
-        if (p >= 1) { this.phase = 'hold'; this.t = 0; }
-      } else if (this.phase === 'hold') {
-        const p = Math.min(1, this.t / this.hold);
-        if (this.kb) this.applyKenBurns(p);
-        // 종료 직전 다음 슬라이드 프리페치
-        if (!this.prefetched && this.t > this.hold - 1.6) {
-          this.prefetched = true;
-          this.loadNext((slot) => { this.pending = slot || null; });
-        }
-        if (this.t >= this.hold) { this.phase = 'out'; this.t = 0; }
-      } else if (this.phase === 'out') {
-        const p = Math.min(1, this.t / FADE);
-        screen.material.opacity = 1 - p;
-        spill.material.opacity = (1 - p) * 0.42;
-        if (p >= 1) {
-          const slot = this.pending; this.pending = null;
-          if (slot) this.install(slot);
-          else { this.phase = 'loading'; this.loadNext((s) => { if (s && this.near) this.install(s); else this.phase = 'idle'; }); }
-        }
-      }
-    },
+    });
+  }
+  cinemaCtl = createCinemaPlayback({
+    items: def.items.slice(), load: loadSlot,
+    firstIndex: new URLSearchParams(location.search).get('preview') === 'cinema-video'
+      ? Math.max(0, def.items.findIndex(item => item.type === 'video'))
+      : new URLSearchParams(location.search).get('preview') === 'cinema-portrait'
+        ? Math.max(0, def.items.findIndex(item => item.type === 'video' && item.w < item.h)) : 0,
+    ...cinemaScreen,
+    onError(error) { if (error.name !== 'AbortError') console.warn('상영 준비 실패 — 다음 기록으로 이동', error); },
+  });
+  cinemaCtl.screen = screen;
+  cinemaCtl.isNear = () => player.floor === def.floor && Math.abs(player.pos.z - cz) < L / 2 + 2
+    && Math.abs(player.pos.x) < W / 2;
+  cinemaCtl.tick = dt => {
+    const near = cinemaCtl.isNear();
+    cinemaCtl.update(dt, near, !controlsActive || viewerOpen || document.hidden);
+    cinemaWatchBtn.hidden = !near || !controlsActive || viewerOpen;
   };
+
 }
 
 /* ═══════════════════ 비밀의 방 챌린지 빌드 (요나고역 9와 3/4승강장) ═══════════════════ */
@@ -2131,7 +2021,8 @@ bgmBtn.addEventListener('click', () => (bgmOn ? stopBgm() : startBgm()));
 // 페이드 인·아웃과 뷰어 영상 감상 중 자동 덕킹(볼륨 낮춤)
 function updateBgm(dt) {
   if (!bgmAvailable) return;
-  const ducked = viewerOpen && viewerBody.querySelector('video');
+  const media = viewerOpen && viewerBody.querySelector('video');
+  const ducked = media && !media.paused && !media.muted && media.volume > 0;
   const target = bgmTarget * (ducked ? 0.2 : 1);
   bgm.volume = Math.max(0, Math.min(1, bgm.volume + (target - bgm.volume) * Math.min(1, dt * 1.6)));
   if (!bgmOn && bgm.volume < 0.004 && !bgm.paused) bgm.pause();
@@ -2275,9 +2166,171 @@ const viewerEl = document.getElementById('viewer');
 const viewerBody = document.getElementById('viewerBody');
 const viewerCap = document.getElementById('viewerCap');
 const viewerCloseBtn = document.getElementById('viewerClose');
+const cinemaWatchBtn = document.getElementById('cinemaWatch');
+const cinemaToolbar = document.getElementById('cinemaToolbar');
+const cinemaQuality = document.getElementById('cinemaQuality');
+const cinemaRecord = document.getElementById('cinemaRecord');
+const cinemaSound = document.getElementById('cinemaSound');
+const cinemaStatus = document.getElementById('cinemaStatus');
 let viewerOpen = false;
 let controlsBeforeViewer = false;
 let viewerReturnFocus = null;
+let cinemaViewing = null;
+let cinemaBackdropFrame = 0;
+
+function clearViewerMedia() {
+  cancelAnimationFrame(cinemaBackdropFrame);
+  cinemaBackdropFrame = 0;
+  const media = viewerBody.querySelector('video');
+  if (media) { media.pause(); media.removeAttribute('src'); media.load(); }
+  viewerBody.replaceChildren();
+}
+
+function renderCinemaItem(index, position = 0, resume = true, forceOriginal = false) {
+  if (!cinemaViewing || !cinemaCtl.items.length) return;
+  clearViewerMedia();
+  cinemaViewing.index = (index + cinemaCtl.items.length) % cinemaCtl.items.length;
+  const item = cinemaCtl.items[cinemaViewing.index];
+  const isVideo = item.type === 'video';
+  cinemaRecord.value = isVideo ? String(cinemaViewing.index) : '';
+  viewerCap.textContent = `CINEMA · Day ${item.day} · ${isVideo ? '영상 · 映像' : '사진 · 写真'} · ${cinemaViewing.index + 1} / ${cinemaCtl.items.length}`;
+  cinemaSound.disabled = !isVideo;
+  cinemaQuality.disabled = !isVideo;
+  cinemaToolbar.hidden = false; cinemaStatus.hidden = false;
+  cinemaStatus.textContent = '불러오는 중… · 読み込み中…';
+  const media = document.createElement(isVideo ? 'video' : 'img');
+  const backdrop = document.createElement('canvas');
+  backdrop.width = 240; backdrop.height = 135; backdrop.className = 'cinemaBackdrop';
+  backdrop.setAttribute('aria-hidden', 'true');
+  viewerBody.append(backdrop, media);
+  const paint = () => {
+    // 영상 디코딩을 추가하지 않고 작은 캔버스에 현재 프레임을 복사한다.
+    const w = isVideo ? media.videoWidth : media.naturalWidth;
+    const h = isVideo ? media.videoHeight : media.naturalHeight;
+    backdrop.hidden = !w || !h || w >= h;
+    if (backdrop.hidden) return;
+    const ratio = Math.max(backdrop.width / w, backdrop.height / h);
+    backdrop.getContext('2d').drawImage(media, (backdrop.width - w * ratio) / 2,
+      (backdrop.height - h * ratio) / 2, w * ratio, h * ratio);
+  };
+  if (isVideo) {
+    media.controls = true; media.playsInline = true; media.preload = 'auto';
+    media.muted = !cinemaViewing.sound;
+    media.setAttribute('aria-label', viewerCap.textContent);
+    let lastPaint = 0;
+    const animate = now => {
+      if (!viewerOpen || viewerBody.querySelector('video') !== media) return;
+      if (!document.hidden && media.readyState >= 2 && now - lastPaint > 125) { paint(); lastPaint = now; }
+      cinemaBackdropFrame = requestAnimationFrame(animate);
+    };
+    cinemaBackdropFrame = requestAnimationFrame(animate);
+    media.addEventListener('loadedmetadata', () => {
+      if (position > 0 && Number.isFinite(media.duration)) media.currentTime = Math.min(position, media.duration);
+      if (resume) media.play().catch(() => {
+        if (viewerBody.querySelector('video') === media) cinemaStatus.textContent = '▶ 버튼을 눌러 재생해 주세요 · 再生ボタンを押してください';
+      });
+    }, { once: true });
+    media.addEventListener('playing', () => {
+      if (viewerBody.querySelector('video') === media) cinemaStatus.textContent = '처음부터 끝까지 감상하세요 · 最後までご覧ください';
+    });
+    media.addEventListener('waiting', () => {
+      if (viewerBody.querySelector('video') === media) cinemaStatus.textContent = '영상을 준비하고 있습니다… · 映像を準備しています…';
+    });
+    const pausedMessage = () => {
+      if (viewerBody.querySelector('video') === media && media.paused && !media.ended)
+        cinemaStatus.textContent = '일시정지 · 一時停止';
+    };
+    media.addEventListener('loadeddata', pausedMessage);
+    media.addEventListener('pause', pausedMessage);
+    media.addEventListener('ended', () => {
+      if (viewerBody.querySelector('video') === media) cinemaStatus.textContent = '감상이 끝났습니다 · 上映が終わりました';
+    });
+    media.addEventListener('volumechange', () => {
+      if (!cinemaViewing || viewerBody.querySelector('video') !== media) return;
+      cinemaViewing.sound = !media.muted && media.volume > 0;
+      updateCinemaSound();
+    });
+    const src = forceOriginal ? item.file : cinemaVideoSource(item, IS_TOUCH, cinemaQuality.value);
+    media.addEventListener('error', () => {
+      if (viewerBody.querySelector('video') !== media) return;
+      if (src !== item.file) renderCinemaItem(cinemaViewing.index, position, resume, true);
+      else cinemaStatus.textContent = '영상을 불러오지 못했습니다. 다음 기록을 선택해 주세요 · 次の記録を選んでください';
+    }, { once: true });
+    media.src = src;
+  } else {
+    media.alt = viewerCap.textContent;
+    media.onload = () => {
+      if (!viewerBody.contains(media)) return;
+      paint(); cinemaStatus.textContent = '이전·다음 버튼으로 기록을 골라 보세요 · 前後の記録もご覧ください';
+    };
+    media.onerror = () => {
+      if (viewerBody.contains(media)) cinemaStatus.textContent = '사진을 불러오지 못했습니다 · 写真を読み込めませんでした';
+    };
+    media.src = item.file;
+  }
+  updateCinemaSound();
+}
+
+function updateCinemaSound() {
+  const sound = Boolean(cinemaViewing?.sound);
+  cinemaSound.setAttribute('aria-pressed', String(sound));
+  cinemaSound.textContent = sound ? '소리 끄기 · 音声 OFF' : '소리 켜기 · 音声 ON';
+}
+
+function openCinemaViewer() {
+  if (!controlsActive || viewerOpen || !cinemaCtl?.isNear()) return;
+  const index = cinemaCtl.i >= 0 ? cinemaCtl.i : cinemaCtl.upcoming?.index || 0;
+  cinemaViewing = { index, sound: false, position: player.pos.clone(), floor: player.floor,
+    yaw: player.yaw, pitch: player.pitch };
+  if (autoTour.active) stopAutoTour(true);
+  cinemaCtl.video?.pause();
+  visitorTraces?.reset();
+  player.pos.set(cinemaInfo.viewX, EYE + FLOOR_HEIGHT, cinemaInfo.cz);
+  player.yaw = Math.PI / 2; player.pitch = Math.atan2(cinemaInfo.screenY - player.pos.y, player.pos.x - cinemaInfo.screenX);
+  player.velY = 0;
+  camera.position.copy(player.pos); camera.rotation.set(player.pitch, player.yaw, 0);
+  openViewer(null, cinemaWatchBtn);
+  viewerEl.classList.add('cinema');
+  cinemaRecord.replaceChildren(new Option('영상 선택 · 映像を選択', ''));
+  let count = 0;
+  cinemaCtl.items.forEach((item, i) => {
+    if (item.type === 'video') cinemaRecord.add(new Option(`Day ${item.day} · ${++count}`, String(i)));
+  });
+  cinemaQuality.value = IS_TOUCH ? 'auto' : 'original';
+  renderCinemaItem(index);
+}
+cinemaWatchBtn.addEventListener('click', openCinemaViewer);
+document.getElementById('cinemaPrevious').addEventListener('click', () => renderCinemaItem(cinemaViewing.index - 1));
+document.getElementById('cinemaNext').addEventListener('click', () => renderCinemaItem(cinemaViewing.index + 1));
+cinemaSound.addEventListener('click', () => {
+  const video = viewerBody.querySelector('video');
+  if (!video || !cinemaViewing) return;
+  cinemaViewing.sound = !cinemaViewing.sound;
+  video.muted = !cinemaViewing.sound;
+  if (cinemaViewing.sound && video.volume === 0) video.volume = 1;
+  updateCinemaSound();
+  video.play().catch(() => { cinemaStatus.textContent = '재생 버튼을 눌러 주세요 · 再生ボタンを押してください'; });
+});
+cinemaQuality.addEventListener('change', () => {
+  const video = viewerBody.querySelector('video');
+  renderCinemaItem(cinemaViewing.index, video?.currentTime || 0, !video?.paused);
+});
+cinemaRecord.addEventListener('change', () => {
+  if (cinemaRecord.value !== '') renderCinemaItem(Number(cinemaRecord.value));
+});
+let hiddenCinemaVideo = null;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    cinemaCtl?.video?.pause();
+    if (cinemaCtl) cinemaCtl.suspended = true;
+    const video = viewerOpen && viewerBody.querySelector('video');
+    hiddenCinemaVideo = video && !video.paused ? video : null;
+    hiddenCinemaVideo?.pause();
+  } else {
+    if (hiddenCinemaVideo && viewerBody.contains(hiddenCinemaVideo)) hiddenCinemaVideo.play().catch(() => {});
+    hiddenCinemaVideo = null;
+  }
+});
 
 function openViewer(art, trigger = null) {
   viewerOpen = true;
@@ -2290,11 +2343,13 @@ function openViewer(art, trigger = null) {
     galleryPanel.setAttribute('aria-hidden', 'true');
   }
   if (document.pointerLockElement) document.exitPointerLock();
-  viewerBody.innerHTML = '';
-  if (art.isVideo) {
+  clearViewerMedia();
+  if (!art) {
+    // 극장 집중 감상의 내용은 renderCinemaItem에서 채운다.
+  } else if (art.isVideo) {
     if (art.video) art.video.pause();
     const v = document.createElement('video');
-    v.src = art.item.file; v.controls = true; v.autoplay = true; v.playsInline = true;
+    v.src = cinemaVideoSource(art.item, IS_TOUCH); v.controls = true; v.autoplay = true; v.playsInline = true;
     v.setAttribute('aria-label', art.specialLabel
       || `${art.dayLabel} 영상·映像 No.${String(art.idxInDay).padStart(3, '0')}`);
     viewerBody.appendChild(v);
@@ -2304,17 +2359,23 @@ function openViewer(art, trigger = null) {
     im.alt = `${art.dayLabel} 사진·写真 No.${String(art.idxInDay).padStart(3, '0')}`;
     viewerBody.appendChild(im);
   }
-  viewerCap.textContent = art.specialLabel
-    || `${art.dayLabel}  ·  No.${String(art.idxInDay).padStart(3, '0')}`;
+  viewerCap.textContent = art ? art.specialLabel
+    || `${art.dayLabel}  ·  No.${String(art.idxInDay).padStart(3, '0')}` : 'CINEMA';
   viewerEl.classList.add('show');
   viewerEl.setAttribute('aria-hidden', 'false');
   viewerCloseBtn.focus();
 }
 function closeViewer() {
   viewerOpen = false;
-  const media = viewerBody.querySelector('video');
-  if (media) { media.pause(); media.removeAttribute('src'); media.load(); }
-  viewerBody.innerHTML = '';
+  clearViewerMedia();
+  if (cinemaViewing) {
+    player.pos.copy(cinemaViewing.position); player.floor = cinemaViewing.floor;
+    player.yaw = cinemaViewing.yaw; player.pitch = cinemaViewing.pitch;
+    camera.position.copy(player.pos); camera.rotation.set(player.pitch, player.yaw, 0);
+    cinemaViewing = null; visitorTraces?.reset();
+  }
+  viewerEl.classList.remove('cinema');
+  cinemaToolbar.hidden = true; cinemaStatus.hidden = true;
   viewerEl.classList.remove('show');
   viewerEl.setAttribute('aria-hidden', 'true');
   controlsActive = controlsBeforeViewer;
@@ -2333,7 +2394,7 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && viewerOpen) { e.preventDefault(); closeViewer(); return; }
   if (e.code !== 'Tab' || !viewerOpen) return;
   const focusable = [...viewerEl.querySelectorAll('button, input, select, textarea, video[controls]')]
-    .filter((el) => !el.disabled);
+    .filter((el) => !el.disabled && el.getClientRects().length);
   if (!focusable.length) return;
   const index = focusable.indexOf(document.activeElement);
   const next = e.shiftKey
@@ -2828,6 +2889,11 @@ function tryViewAt(sx, sy) {
   if (secretProjectionCtl?.canInteract()) meshes.push(secretProjectionCtl.plane);
   if (guestbookScreen && player.floor === 0) meshes.push(guestbookScreen.plane);
   const hits = raycaster.intersectObjects(meshes, false);
+  if (cinemaCtl?.isNear()) {
+    raycaster.far = 14;
+    const cinemaHit = raycaster.intersectObject(cinemaInfo.screenBase, false)[0];
+    if (cinemaHit && (!hits.length || cinemaHit.distance < hits[0].distance)) { openCinemaViewer(); return; }
+  }
   if (hits[0]?.object === guestbookScreen?.plane) openGuestbook();
   else if (hits.length) openViewer(hits[0].object.userData.art);
 }
@@ -2905,7 +2971,7 @@ function updateRooms(now) {
       playing++;
       if (!a.video) {
         const v = document.createElement('video');
-        v.src = a.item.file; v.muted = true; v.loop = true; v.playsInline = true;
+        v.src = cinemaVideoSource(a.item, IS_TOUCH); v.muted = true; v.loop = true; v.playsInline = true;
         v.preload = 'auto'; v.crossOrigin = 'anonymous';
         v.addEventListener('loadedmetadata', () => {
           if (a.video === v) fitArtworkToAspect(a, v.videoWidth / v.videoHeight);
@@ -3124,6 +3190,11 @@ async function init() {
         player.yaw = 0;
         updateFloorNav(0);
       }
+    } else if (['cinema', 'cinema-video', 'cinema-portrait'].includes(preview) && cinemaInfo) {
+      player.floor = 1;
+      spawnPoint.set(cinemaInfo.viewX, EYE + FLOOR_HEIGHT, cinemaInfo.cz);
+      player.yaw = Math.PI / 2;
+      updateFloorNav(1);
     } else if (preview === 'secret-projection' && secretProjectionCtl && cinemaInfo
         && (location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
       // 로컬 개발 서버에서만 저장된 완주 기록에 손대지 않고 해금 UI·프로젝션을 검수한다.
@@ -3171,11 +3242,11 @@ function loop() {
   updateVisitorTraces();
   updateRooms(performance.now());
   updateBgm(dt);
-  if (cinemaCtl) cinemaCtl.update(dt);
+  if (cinemaCtl) cinemaCtl.tick(dt);
   if (secretProjectionCtl) secretProjectionCtl.update();
   guestbookScreen?.update(dt, player, controlsActive && !viewerOpen);
   daisenLandscape?.update(dt, controlsActive);
-  renderer.render(scene, camera);
+  if (!viewerOpen) renderer.render(scene, camera); // 집중 감상 중에는 영상 재생에 GPU 여유를 준다.
 }
 
 init();
@@ -3196,7 +3267,7 @@ window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera
     for (let i = 0; i < n; i++) {
       updatePlayer(1 / 60);
       updateVisitorTraces();
-      if (cinemaCtl) cinemaCtl.update(1 / 60);
+      if (cinemaCtl) cinemaCtl.tick(1 / 60);
       if (secretProjectionCtl) secretProjectionCtl.update();
     }
     lastRoomCheck = -1e9;

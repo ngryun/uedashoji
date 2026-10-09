@@ -20,7 +20,9 @@ fs.mkdirSync(output, { recursive: true });
         export const firebaseConfig = { apiKey:'demo-key', projectId:'demo-ueda-traces', authDomain:'demo-ueda-traces.firebaseapp.com' };` }));
       await context.route('**/social.js', route => route.fulfill({ contentType: 'text/javascript', body: fs.readFileSync(path.join(root, 'social.js'), 'utf8')
         .replace('const db = fs.getFirestore(app);', "const db = fs.getFirestore(app); fs.connectFirestoreEmulator(db, '127.0.0.1', 8085);")
-        .replace('const auth = authMod.getAuth(app);', "const auth = authMod.getAuth(app); authMod.connectAuthEmulator(auth, 'http://127.0.0.1:9095', { disableWarnings: true });") }));
+        .replace('const auth = authMod.getAuth(app);', "const auth = authMod.getAuth(app); authMod.connectAuthEmulator(auth, 'http://127.0.0.1:9095', { disableWarnings: true });")
+        // 127.0.0.1 counts as a test page, which never saves; these walks go to the emulator instead.
+        .replace('function testPage() {', 'function testPage() { return false;') }));
       const page = await context.newPage();
       page.on('pageerror', error => errors.push(error.message));
       page.on('console', msg => { if (msg.type() === 'error' && /shader|WebGLProgram/.test(msg.text())) errors.push(msg.text()); });
@@ -35,9 +37,11 @@ fs.mkdirSync(output, { recursive: true });
     await a.click('#enterBtn');
     await a.evaluate(async () => { const social = await import('/social.js'); await social.initSocial(); if (!social.canShareVisitorTraces()) throw Error('Emulator auth failed'); });
     // Start away from the central mascot and benches, then walk with real keyboard input.
+    // Paths start up to 4.5m from the arrival point and take 3.9m more. The walk stops at the door jamb
+    // near z=0.6 (9.4m); even the longest clearance completes the segment by frame ~120 of 140.
     await a.evaluate(() => window.__m.tp(-2, 10, 0));
     await a.keyboard.down('KeyW');
-    await a.evaluate(() => __m.step(75));
+    await a.evaluate(() => __m.step(140));
     await a.keyboard.up('KeyW');
     await a.waitForFunction(() => JSON.parse(sessionStorage.getItem('guest.traces.visit.v1'))?.rooms?.[0]?.count >= 1);
     await a.waitForFunction(() => __m.visitorTraces.mesh.count >= 6);

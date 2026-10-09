@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import { createTraceRecorder, visibleTraceSegments, validTrace, traceLayout, tracePreference,
-  saveTracePreference, cleanTraceName, traceName, saveTraceName, traceLabel, TRACE_LIFETIME } from '../visitor-traces.js';
+  saveTracePreference, cleanTraceName, traceName, saveTraceName, traceLabel, TRACE_LIFETIME,
+  TRACE_START_MIN, TRACE_START_SPREAD } from '../visitor-traces.js';
 
 const storage = () => { const values = new Map(); return {
   getItem: k => values.get(k), setItem: (k, v) => values.set(k, v),
@@ -11,11 +12,12 @@ const storage = () => { const values = new Map(); return {
 const rooms = [{ floor: 0, elevation: 0, W: 16, zFrom: 14, zTo: -100 },
   { floor: 1, elevation: 5.2, W: 16, zFrom: 14, zTo: -100 }];
 const layout = traceLayout(rooms);
-function setup(shared = storage(), name = () => '') {
+// Most tests start paths at once; the arrival clearance has its own tests below.
+function setup(shared = storage(), name = () => '', options = { startAfter: () => 0 }) {
   let time = 100000;
   const segments = [];
   const recorder = createTraceRecorder({ storage: shared, layout, id: () => 'visit', name,
-    now: () => time, onSegment: s => segments.push(s) });
+    now: () => time, onSegment: s => segments.push(s), ...options });
   const walk = (start, end, room = 0, active = true) => {
     const sign = end > start ? 1 : -1;
     for (let z = start; sign * (end - z) >= -0.001; z += sign * 0.1) recorder.sample({ x: 0, z }, room, active);
@@ -144,11 +146,12 @@ function controller(t, adapter = {}) {
   }) }) };
   t.after(() => { globalThis.document = original; });
   const watched = [], stopped = [], statuses = [];
-  const social = { initSocial: async () => {}, canShareVisitorTraces: () => true,
+  const social = { initSocial: async () => {}, canShareVisitorTraces: () => true, canSaveVisitorTraces: () => true,
     saveVisitorTrace: async () => true,
     watchVisitorTraces(options, cb, error) { watched.push({ ...options, cb, error }); return () => stopped.push(options.room); },
     ...adapter };
-  const view = createVisitorTraces({ rooms, mobile: false, social, storage: storage(), onStatus: v => statuses.push(v) });
+  const view = createVisitorTraces({ rooms, mobile: false, social, storage: storage(), onStatus: v => statuses.push(v),
+    startAfter: () => 0 });
   t.after(() => view.dispose());
   let time = Date.now();
   const tick = (z, active = true, room = 0, hidden = false) => view.update({ position: { x: 0, z }, room, active, hidden, time: time += 60 });
@@ -222,9 +225,14 @@ test('main scene gates recording on actual control, floor and movement state', (
   for (const change of [c => { c.controlsActive = false; }, c => { c.autoTour.active = true; },
     c => { c.player.onGround = false; }, c => { c.viewerOpen = true; },
     c => { c.stairProgressAt = () => .5; }, c => { c.inSecretZone = () => true; },
-    c => { c.player.pos.x = 9; }, c => { c.player.pos.z = 15; }]) {
+    c => { c.player.pos.x = 9; }, c => { c.player.pos.z = 15; },
+    c => { c.player.pos.z = 13.95; }, c => { c.player.pos.z = -99.95; }]) {
     assert.equal(check(change).active, false);
   }
+  // Wall contact settles exactly on W/2 - RADIUS (or a float hair past it); it still records.
+  assert.equal(check(c => { c.player.pos.x = 8 - .38 + 1e-15; }).active, true);
+  assert.equal(check(c => { c.player.pos.x = 8 - .38 + .02; }).active, false);
+  assert.equal(check(c => { c.player.pos.x = -(8 - .38); }).active, true);
   assert.equal(check(c => { c.document.hidden = true; }).hidden, true);
 });
 
@@ -238,4 +246,140 @@ test('a walk during initial sign-in is shared once ready, unless opted out first
     ready(); await flush(); assert.equal(writes, optOut ? 0 : 1);
     c.view.dispose();
   }
+});
+
+test('paths begin only after walking a varied distance away from where the visitor arrived', () => {
+  const s = setup(storage(), () => '', { startAfter: () => 3 });
+  s.walk(10, 4);
+  assert.equal(s.segments.length, 0, 'spawn clearance plus six steps does not fit in 6m');
+  s.walk(4, 2);
+  const first = s.segments[0].points[0];
+  assert.ok(10 - first.z > 3.5 && 10 - first.z < 3.7, String(first.z));
+  // Straight-line distance, not distance walked: circling near the entrance never starts a path.
+  const circle = setup(storage(), () => '', { startAfter: () => 3 });
+  for (let a = 0; a < 40; a += 0.1) circle.recorder.sample({ x: Math.cos(a), z: 10 + Math.sin(a) }, 0, true);
+  assert.equal(circle.recorder.pending.length, 0);
+  assert.equal(circle.segments.length, 0, 'about 40m walked, never 3m away');
+  // Every arrival (doorway, floor switch via reset) needs its own clearance; a jump landing does not.
+  const doors = setup(storage(), () => '', { startAfter: () => 3 });
+  doors.walk(10, 5); assert.ok(doors.recorder.pending.length > 0);
+  doors.walk(5, 2.1, 1); assert.equal(doors.recorder.pending.length, 0, 'doorway');
+  doors.walk(2.1, 1.2, 1); assert.ok(doors.recorder.pending.length > 0);
+  doors.walk(1.2, -1.7, 1, false); doors.walk(-1.7, -2.5, 1);
+  assert.equal(doors.recorder.pending.length, 1, 'jump landing keeps the doorway arrival');
+  doors.recorder.reset(); doors.walk(-2.5, -5.4, 1);
+  assert.equal(doors.recorder.pending.length, 0, 'floor switch');
+});
+
+test('a path that turns back toward the arrival point is not kept', () => {
+  // Peeks 4m in and heads back out: the old rule finished this path 1.1m from the doorway.
+  const s = setup(storage(), () => '', { startAfter: () => 3 });
+  s.walk(10, 6); assert.ok(s.recorder.pending.length > 0);
+  s.walk(6, 9.5);
+  assert.equal(s.segments.length, 0); assert.equal(s.recorder.pending.length, 0);
+  // Turning back early enough still keeps a path, with every step clear of the arrival point.
+  const far = setup(storage(), () => '', { startAfter: () => 3 });
+  far.walk(10, 5); far.walk(5, 9.5);
+  assert.equal(far.segments.length, 1);
+  for (const p of far.segments[0].points) assert.ok(Math.hypot(p.x, 10 - p.z) >= 3, String(p.z));
+});
+
+test('the arrival clearance varies between visitors within the configured range', t => {
+  for (const [random, clearance] of [[0, TRACE_START_MIN], [0.999999, TRACE_START_MIN + TRACE_START_SPREAD]]) {
+    t.mock.method(Math, 'random', () => random);
+    const s = setup(storage(), () => '', {});
+    s.walk(10, 0);
+    const away = 10 - s.segments[0].points[0].z;
+    assert.ok(away > clearance + 0.5 && away < clearance + 0.7, `${random}: ${away}`);
+    t.mock.restoreAll();
+  }
+});
+
+test('a path no viewer would draw is dropped without using up the room slot', () => {
+  let allow = false; const checked = [];
+  const s = setup(storage(), () => '', { startAfter: () => 0, accept: segment => { checked.push(segment); return allow; } });
+  s.walk(10, 6);
+  assert.equal(checked.length, 1); assert.equal(s.segments.length, 0); assert.equal(s.recorder.pending.length, 0);
+  allow = true; s.walk(6, 2);
+  assert.equal(s.segments.length, 1); assert.equal(s.segments[0].id, 'visit-0-0');
+});
+
+test('visit ids do not need crypto.randomUUID (plain-HTTP LAN pages, older Safari)', t => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  Object.defineProperty(globalThis, 'crypto', { configurable: true,
+    value: { getRandomValues: bytes => bytes.fill(171) } });
+  t.after(() => Object.defineProperty(globalThis, 'crypto', original));
+  const data = storage();
+  createTraceRecorder({ storage: data, layout, onSegment() {} });
+  assert.equal(JSON.parse(data.getItem('guest.traces.visit.v1')).id, 'ab'.repeat(16));
+});
+
+test('test pages read shared footprints but keep their own walk on screen only', async t => {
+  let writes = 0;
+  const c = controller(t, { canSaveVisitorTraces: () => false, saveVisitorTrace: async () => { writes++; return true; } });
+  c.view.start(); await flush(); c.walk(); await flush();
+  assert.equal(writes, 0); assert.equal(c.statuses.at(-1), 'preview');
+  assert.equal(c.watched.length, 1); assert.equal(c.view.mesh.count, 6);
+  // Steps taken while sign-in is still loading are not flushed to the shared collection either.
+  let ready;
+  const early = controller(t, { initSocial: () => new Promise(resolve => { ready = resolve; }),
+    canSaveVisitorTraces: () => false, saveVisitorTrace: async () => { writes++; return true; } });
+  early.view.start(); early.walk(); ready(); await flush();
+  assert.equal(writes, 0); assert.equal(early.view.mesh.count, 6);
+});
+
+test('a segment outside the room is neither saved nor counted against the room', async t => {
+  let writes = 0;
+  const c = controller(t, { saveVisitorTrace: async () => { writes++; return true; } });
+  c.view.start(); await flush();
+  let time = Date.now();
+  for (let z = 10; z >= 5.9; z -= .1) c.view.update({ position: { x: 7.95, z }, room: 0, active: true, time: time += 60 });
+  await flush(); assert.equal(writes, 0);
+  c.walk(); await flush(); assert.equal(writes, 1);
+});
+
+test('development hosts and preview pages never save footprints to the shared collection', async () => {
+  const source = readFileSync(new URL('../social.js', import.meta.url), 'utf8')
+    .replace(/^import .*;$/m, '').replaceAll('export ', '');
+  const page = (hostname, search = '') => {
+    const context = vm.createContext({ console, URLSearchParams, globalThis: { location: { hostname, search } } });
+    vm.runInContext(source, context);
+    // Signed in to Firebase, so only the page decides whether a walk may be saved.
+    vm.runInContext("mode = 'firebase'; fb = { authUser: { uid: 'visitor' } };", context);
+    return context;
+  };
+  const testPage = (hostname, search) => vm.runInContext('testPage()', page(hostname, search));
+  // Any IP address (loopback, LAN, link-local, IPv6, 0.0.0.0 from serve.mjs) or local name is a test page.
+  for (const host of ['localhost', 'localhost.', '127.0.0.1', '0.0.0.0', '[::1]', '[fd00::5]', '[fe80::1]', '[::ffff:7f00:1]',
+    '192.168.0.12', '10.1.2.3', '172.20.1.1', '169.254.10.1', '100.101.102.103', '203.0.113.7', 'museum.localhost', 'mac.local', 'mac.local.']) {
+    assert.equal(testPage(host), true, host);
+  }
+  for (const host of ['ngryun.github.io', 'ngryun.github.io.', '192.168.example.com', 'localhost.example.com']) {
+    assert.equal(testPage(host), false, host);
+  }
+  assert.equal(testPage('ngryun.github.io', '?preview=cinema'), true);
+  assert.equal(testPage('ngryun.github.io', '?touch=1'), false);
+  const local = page('localhost');
+  assert.equal(vm.runInContext('canShareVisitorTraces()', local), true, 'still reads');
+  assert.equal(vm.runInContext('canSaveVisitorTraces()', local), false);
+  await assert.rejects(vm.runInContext('saveVisitorTrace({ id: "x", room: 0, points: [] })', local), /TRACE_SHARING_UNAVAILABLE/);
+  assert.equal(vm.runInContext('canSaveVisitorTraces()', page('ngryun.github.io')), true);
+});
+
+test('the sharing notice follows the recording switch', () => {
+  const main = readFileSync(new URL('../main.js', import.meta.url), 'utf8');
+  const body = main.slice(main.indexOf('let traceSharing'), main.indexOf('function setTraceName'));
+  const context = vm.createContext({ tracesEnabled: true, traceStatus: {}, traceHudBtn: {}, visitorTraces: null,
+    tracePreferences: null, saveTracePreference() {}, updateTraceUI() {} });
+  vm.runInContext(body, context);
+  const { traceStatus } = context;
+  context.updateTraceStatus('local');
+  assert.equal(traceStatus.hidden, false); assert.match(traceStatus.textContent, /공유에 연결되지 않아/);
+  context.setTracesEnabled(false);
+  assert.equal(traceStatus.hidden, true, 'OFF hides a notice that was already showing');
+  context.updateTraceStatus('unavailable'); assert.equal(traceStatus.hidden, true);
+  context.setTracesEnabled(true);
+  assert.equal(traceStatus.hidden, false, 'ON shows the last known state again');
+  context.updateTraceStatus('preview'); assert.match(traceStatus.textContent, /개발·미리보기/);
+  context.updateTraceStatus('shared'); assert.equal(traceStatus.hidden, true);
 });

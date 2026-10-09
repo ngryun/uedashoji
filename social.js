@@ -226,8 +226,22 @@ export function canShareVisitorTraces() {
   return mode === 'firebase' && Boolean(fb?.authUser?.uid);
 }
 
+// 개발 서버와 ?preview= 검수 화면의 테스트 걸음은 공유 컬렉션에 남기지 않는다. 공개 사이트는 도메인으로만
+// 열리므로 IP 주소(0.0.0.0·사설·IPv6 포함)나 localhost·.local로 연 화면은 모두 검수용으로 본다.
+// 다른 방문자의 발자국은 그대로 읽어 화면 검수에 쓸 수 있다.
+const TEST_HOST = /^(localhost|\d+(\.\d+){3}|\[[\da-f:.]+\])$|\.(localhost|local)$/;
+function testPage() {
+  const page = globalThis.location;
+  if (!page) return false;
+  return TEST_HOST.test(String(page.hostname).replace(/\.$/, '')) || new URLSearchParams(page.search).has('preview');
+}
+
+export function canSaveVisitorTraces() {
+  return canShareVisitorTraces() && !testPage();
+}
+
 export async function saveVisitorTrace(segment, shouldWrite = () => true) {
-  if (!canShareVisitorTraces()) throw new Error('TRACE_SHARING_UNAVAILABLE');
+  if (!canSaveVisitorTraces()) throw new Error('TRACE_SHARING_UNAVAILABLE');
   // Transactions fail offline rather than queuing an upload after recording was disabled.
   // Only the optional nickname the visitor typed is stored: no owner ID, guestbook name or school.
   const { id, room, layout, points, name } = segment;

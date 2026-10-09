@@ -3,6 +3,10 @@ import * as THREE from './lib/three.module.js';
 export const TRACE_LIFETIME = 60 * 24 * 60 * 60 * 1000;
 export const TRACE_STEP = 0.65;
 export const TRACE_NAME_MAX = 8;
+// Everyone arrives at the same spawn point or doorway. Paths begin only after a varied walk away
+// from that arrival point, so first steps neither pile up there nor hide each other.
+export const TRACE_START_MIN = 2.5;
+export const TRACE_START_SPREAD = 2;
 const PREF_KEY = 'guest.traces.enabled.v1';
 const NAME_KEY = 'guest.traces.name.v1';
 const SESSION_KEY = 'guest.traces.visit.v1';
@@ -14,6 +18,13 @@ const read = (storage, key, fallback) => {
 const write = (storage, key, value) => {
   try { storage?.setItem(key, JSON.stringify(value)); } catch { /* Memory-only on restricted browsers. */ }
 };
+// randomUUID needs a secure context (not http://<LAN IP>) and Safari 15.4+; getRandomValues does not.
+function randomId() {
+  const crypto = globalThis.crypto;
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  const bytes = crypto?.getRandomValues?.(new Uint8Array(16)) ?? Uint8Array.from({ length: 16 }, () => Math.random() * 256);
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
 export function tracePreference(storage) { return read(storage, PREF_KEY, true) !== false; }
 export function saveTracePreference(storage, enabled) { write(storage, PREF_KEY, enabled); }
 
@@ -40,16 +51,17 @@ export function traceLayout(rooms) {
   return `traces-v1-${(hash >>> 0).toString(16)}`;
 }
 
-export function createTraceRecorder({ storage, layout, onSegment, now = Date.now, id = () => crypto.randomUUID(),
-  name = () => '' }) {
+export function createTraceRecorder({ storage, layout, onSegment, now = Date.now, id = randomId,
+  name = () => '', startAfter = () => TRACE_START_MIN + Math.random() * TRACE_START_SPREAD, accept = () => true }) {
   let visit = read(storage, SESSION_KEY, null);
   if (!visit || visit.layout !== layout || typeof visit.id !== 'string' || !visit.rooms
       || typeof visit.rooms !== 'object' || Array.isArray(visit.rooms)) {
     visit = { id: id(), layout, rooms: {} };
     write(storage, SESSION_KEY, visit);
   }
-  let previous = null, travelled = 0, points = [], room = null;
-  const reset = () => { previous = null; travelled = 0; points = []; room = null; };
+  let previous = null, travelled = 0, points = [], room = null, arrival = null, clearance = 0;
+  const reset = () => { previous = null; travelled = 0; points = []; room = null; arrival = null; };
+  const arrive = p => { previous = arrival = p; clearance = startAfter(); };
   return {
     reset,
     get pending() { return points; },
@@ -60,13 +72,14 @@ export function createTraceRecorder({ storage, layout, onSegment, now = Date.now
       if (!active) return;
       if (roomId !== room) { reset(); room = roomId; }
       const p = { x: position.x, z: position.z };
-      if (!previous) { previous = p; return; }
+      if (!previous) { arrive(p); return; }
       const length = distance(p, previous);
-      // Normal run movement is <= .42m per frame. Discontinuities are never interpolated.
-      if (length > 0.8) { reset(); room = roomId; previous = p; return; }
+      // Normal run movement is <= .42m per frame. Discontinuities are never interpolated. A jump
+      // landing is nobody else's arrival point, so it keeps the room's arrival and clearance.
+      if (length > 0.8) { points = []; travelled = 0; previous = p; return; }
       const state = visit.rooms[roomId] || { count: 0 };
-      if (state.count >= 2 || (points.length === 0 && state.last
-          && (now() - state.at < 30000 || distance(p, state.last) < 4))) {
+      if (state.count >= 2 || (points.length === 0 && (distance(p, arrival) < clearance || state.last
+          && (now() - state.at < 30000 || distance(p, state.last) < 4)))) {
         previous = p; travelled = 0; return;
       }
       if (length < 1e-6) return;
@@ -74,18 +87,24 @@ export function createTraceRecorder({ storage, layout, onSegment, now = Date.now
       if (travelled + length >= TRACE_STEP) {
         const offset = TRACE_STEP - travelled;
         const side = points.length % 2 ? 0.095 : -0.095;
-        points.push({ x: previous.x + dx * offset - dz * side,
-          z: previous.z + dz * offset + dx * side, angle: Math.atan2(-dx, -dz) });
+        const step = { x: previous.x + dx * offset - dz * side,
+          z: previous.z + dz * offset + dx * side, angle: Math.atan2(-dx, -dz) };
+        // Every step stays clear of the arrival point, so a path that turns back is not kept.
+        if (distance(step, arrival) < clearance) { points = []; travelled = 0; previous = p; return; }
+        points.push(step);
         travelled = travelled + length - TRACE_STEP;
         if (points.length === 6) {
           const createdAt = now(), nickname = cleanTraceName(name());
           const segment = { id: `${visit.id}-${roomId}-${state.count}`, room: roomId, layout,
             points, createdAt, expiresAt: createdAt + TRACE_LIFETIME, ...(nickname ? { name: nickname } : {}) };
-          // Reserve the slot before starting a write: reloads and failures cannot amplify writes.
-          visit.rooms[roomId] = { count: state.count + 1, at: createdAt, last: p };
-          write(storage, SESSION_KEY, visit);
           points = []; travelled = 0;
-          onSegment(segment);
+          // A path no viewer would draw must not use up one of the room's two slots.
+          if (accept(segment)) {
+            // Reserve the slot before starting a write: reloads and failures cannot amplify writes.
+            visit.rooms[roomId] = { count: state.count + 1, at: createdAt, last: p };
+            write(storage, SESSION_KEY, visit);
+            onSegment(segment);
+          }
         }
       } else travelled += length;
       previous = p;
@@ -223,15 +242,18 @@ function makeLabelRenderer(slots) {
   };
 }
 
-export function createVisitorTraces({ rooms, mobile, storage, social, enabled = true, name = '', onStatus = () => {} }) {
+export function createVisitorTraces({ rooms, mobile, storage, social, enabled = true, name = '', onStatus = () => {},
+  startAfter }) {
   const layout = traceLayout(rooms), limit = mobile ? 72 : 144;
   const renderer = makeRenderer(limit), labels = makeLabelRenderer(limit / 6);
   const own = new Map(), remote = new Map(), watches = new Map();
   const failedRooms = new Set();
   let roomIds = [], started = false, ready = false, disposed = false, lastDraw = 0;
-  let online = false, writingFailed = false, generation = 0, nickname = cleanTraceName(name);
+  // online: others' footprints can be read. writable: mine may be saved (never on test pages).
+  let online = false, writable = false, writingFailed = false, generation = 0, nickname = cleanTraceName(name);
   const unsent = new Set();
-  const status = () => onStatus(writingFailed || failedRooms.size ? 'unavailable' : online ? 'shared' : 'local');
+  const status = () => onStatus(writingFailed || failedRooms.size ? 'unavailable'
+    : !online ? 'local' : writable ? 'shared' : 'preview');
   const send = segment => {
     const attempt = generation; unsent.add(segment.id);
     social.saveVisitorTrace(segment, () => enabled && generation === attempt && !disposed).then(saved => {
@@ -243,12 +265,12 @@ export function createVisitorTraces({ rooms, mobile, storage, social, enabled = 
       writingFailed = true; status();
     });
   };
-  const recorder = createTraceRecorder({ storage, layout, name: () => nickname, onSegment(segment) {
-    if (!validTrace(segment, rooms, layout)) return;
-    own.set(segment.id, segment);
-    if (online && enabled) send(segment);
-    else unsent.add(segment.id);
-  } });
+  const recorder = createTraceRecorder({ storage, layout, name: () => nickname, startAfter,
+    accept: segment => validTrace(segment, rooms, layout), onSegment(segment) {
+      own.set(segment.id, segment);
+      if (writable && enabled) send(segment);
+      else unsent.add(segment.id);
+    } });
   const sync = () => {
     for (const [room, stop] of watches) if (!roomIds.includes(room)) {
       stop(); watches.delete(room); remote.delete(room); failedRooms.delete(room);
@@ -279,10 +301,11 @@ export function createVisitorTraces({ rooms, mobile, storage, social, enabled = 
       started = true;
       social.initSocial().then(() => {
         if (disposed) return;
-        ready = true; online = social.canShareVisitorTraces(); status(); sync();
+        ready = true; online = social.canShareVisitorTraces(); writable = social.canSaveVisitorTraces();
+        status(); sync();
         // Preserve the first few steps taken while anonymous sign-in was still loading.
         // This is an in-memory initialization buffer, never an offline upload queue.
-        if (online && enabled) for (const id of [...unsent]) {
+        if (writable && enabled) for (const id of [...unsent]) {
           const segment = own.get(id);
           if (segment) send(segment);
         }

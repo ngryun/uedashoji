@@ -1938,8 +1938,12 @@ function updateTraceUI() {
   traceHudBtn.setAttribute('aria-pressed', String(tracesEnabled));
   traceHudBtn.textContent = tracesEnabled ? '발자국 켜짐 · 足跡 ON' : '발자국 꺼짐 · 足跡 OFF';
 }
-function updateTraceStatus(status) {
-  const text = status === 'shared' ? ''
+// 저장 상태 안내는 기록이 켜져 있을 때만 보인다. 끈 사이에도 마지막 상태를 기억해 다시 켜면 보여 준다.
+let traceSharing = 'shared';
+function updateTraceStatus(status = traceSharing) {
+  traceSharing = status;
+  const text = !tracesEnabled || status === 'shared' ? ''
+    : status === 'preview' ? '개발·미리보기 화면이라 내 발자국은 저장하지 않고 이 화면에만 보입니다 · 開発・プレビュー画面のため、自分の足跡は保存せず、この画面だけに表示します'
     : '공유에 연결되지 않아 내 발자국은 이 화면에만 보입니다 · 接続できないため、自分の足跡はこの画面だけに表示されます';
   traceStatus.textContent = text;
   traceStatus.hidden = !text;
@@ -1947,7 +1951,7 @@ function updateTraceStatus(status) {
 }
 function setTracesEnabled(value) {
   tracesEnabled = value; saveTracePreference(tracePreferences, value);
-  visitorTraces?.setEnabled(value); updateTraceUI();
+  visitorTraces?.setEnabled(value); updateTraceUI(); updateTraceStatus();
 }
 function setTraceName(value) {
   traceNickname = cleanTraceName(value); saveTraceName(tracePreferences, traceNickname);
@@ -1962,7 +1966,7 @@ traceHudBtn.addEventListener('click', event => {
 window.addEventListener('storage', event => {
   if (event.key === 'guest.traces.enabled.v1' || event.key === null) {
     tracesEnabled = tracePreference(tracePreferences);
-    visitorTraces?.setEnabled(tracesEnabled); updateTraceUI();
+    visitorTraces?.setEnabled(tracesEnabled); updateTraceUI(); updateTraceStatus();
   }
   if (event.key === 'guest.traces.name.v1' || event.key === null) {
     traceNickname = traceName(tracePreferences);
@@ -2065,6 +2069,8 @@ function startAutoTour() {
 function stopAutoTour(silent = false) {
   if (!autoTour.active) return;
   autoTour.active = false;
+  // 자동 관람의 정지 지점은 모두가 거쳐 가는 곳이라, 넘겨받은 자리도 새 도착 지점으로 본다.
+  visitorTraces?.reset();
   setAutoButtonUI();
   if (!silent) showHint('자동 관람 해제 · 自動観覧を解除しました');
 }
@@ -3167,9 +3173,15 @@ async function init() {
     buildMuseum(manifest);
     let traceStorage;
     try { traceStorage = sessionStorage; } catch {}
-    visitorTraces = createVisitorTraces({ rooms, mobile: IS_TOUCH, storage: traceStorage,
-      social: Social, enabled: tracesEnabled, name: traceNickname, onStatus: updateTraceStatus });
-    scene.add(visitorTraces.mesh, visitorTraces.labels);
+    // 발자국은 부가 기능이다. 만들지 못해도 3D 입장은 막지 않는다.
+    try {
+      visitorTraces = createVisitorTraces({ rooms, mobile: IS_TOUCH, storage: traceStorage,
+        social: Social, enabled: tracesEnabled, name: traceNickname, onStatus: updateTraceStatus });
+      scene.add(visitorTraces.mesh, visitorTraces.labels);
+    } catch (err) {
+      visitorTraces = null;
+      console.warn('[traces] 방문 발자국을 사용할 수 없습니다', err);
+    }
     // 시각 검수용: ?preview=video, day2-stair, secret-projection으로 시작 위치를 바꾼다.
     const preview = new URLSearchParams(location.search).get('preview');
     if (preview === 'video') {
@@ -3226,11 +3238,13 @@ async function init() {
 function updateVisitorTraces() {
   const traceRoom = roomIndexAt(player.pos.z, player.floor);
   const traceBounds = rooms[traceRoom];
+  // 옆벽에 닿으면 |x|가 정확히 W/2 - RADIUS에 멈추므로 1cm 여유를 둔다. 발자국은 진행 방향 옆으로
+  // 0.095m 비켜 찍히므로, 문턱에서는 0.1m 안쪽에서만 기록해야 옆 공간으로 넘어간 걸음이 생기지 않는다.
   visitorTraces?.update({ position: player.pos, room: traceRoom, hidden: document.hidden,
     active: controlsActive && !autoTour.active && player.onGround && !viewerOpen
       && stairProgressAt(player.pos.x, player.pos.z) === null && !inSecretZone(player)
-      && !!traceBounds && Math.abs(player.pos.x) < traceBounds.W / 2 - RADIUS
-      && player.pos.z <= traceBounds.zFrom && player.pos.z >= traceBounds.zTo });
+      && !!traceBounds && Math.abs(player.pos.x) <= traceBounds.W / 2 - RADIUS + 0.01
+      && player.pos.z <= traceBounds.zFrom - 0.1 && player.pos.z >= traceBounds.zTo + 0.1 });
 }
 
 const clock = new THREE.Clock();

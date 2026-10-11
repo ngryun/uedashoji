@@ -95,3 +95,24 @@ test('local subscribers receive create and edit changes and can unsubscribe', as
   await vm.runInContext(`updateGuestbookEntry('${result.id}', {message:'Another update'})`, context);
   assert.equal(vm.runInContext('snapshots.length', context), 3);
 });
+
+test('slow computers step the rendering resolution down, brief hitches do not', () => {
+  const body = main.slice(main.indexOf('const frameCheck = '), main.indexOf('const clock = new THREE.Clock()'));
+  const run = (frameMs, seconds, { ratio = 1.5, hitchEvery = 0 } = {}) => {
+    const renderer = { ratio, getPixelRatio() { return this.ratio; }, setPixelRatio(v) { this.ratio = v; } };
+    const context = vm.createContext({ controlsActive: true, viewerOpen: false, document: { hidden: false },
+      window: { devicePixelRatio: 2 }, renderer, pixelRatioCap: ratio, Math, Object });
+    vm.runInContext(body, context);
+    let now = 1000;
+    for (let i = 0; now < 1000 + seconds * 1000; i++) {
+      now += hitchEvery && i % hitchEvery === 0 ? 40 : frameMs;
+      context.adaptResolution(now);
+    }
+    return renderer.ratio;
+  };
+  assert.equal(run(16.7, 10), 1.5, 'a smooth 60fps keeps 1.5x');
+  assert.equal(run(16.7, 10, { hitchEvery: 4 }), 1.5, 'occasional photo-loading hitches are ignored');
+  assert.equal(run(33, 2.5), 1.25, 'one slow window lowers one step');
+  assert.equal(run(33, 20), 1, 'never below 1x');
+  assert.equal(run(16.7, 10, { ratio: 1 }), 1);
+});

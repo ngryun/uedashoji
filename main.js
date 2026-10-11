@@ -98,9 +98,11 @@ const biDay = (label) => label.replace(/\(([일월화수목금토])\)/, (_, d) =
 /* ═══════════════════ 기본 셋업 ═══════════════════ */
 const app = document.getElementById('app');
 let renderer = null;
+// 고해상도 화면도 1.5배(모바일 1.7배)까지만 그린다. 느린 컴퓨터는 adaptResolution이 1배까지 낮춘다.
+let pixelRatioCap = IS_TOUCH ? 1.7 : 1.5;
 try {
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, IS_TOUCH ? 1.7 : 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -828,7 +830,7 @@ function buildSecretProjection(def, cz) {
       video.playsInline = true;
       video.preload = 'auto';
       video.crossOrigin = 'anonymous';
-      video.src = cinemaVideoSource(viewerArt.item, IS_TOUCH);
+      video.src = cinemaVideoSource(viewerArt.item, true); // 벽 투사용이라 가벼운 파일로 충분하다.
       video.addEventListener('loadedmetadata', () => {
         if (this.video === video) this.fit(video.videoWidth / video.videoHeight);
       }, { once: true });
@@ -2977,7 +2979,8 @@ function updateRooms(now) {
       playing++;
       if (!a.video) {
         const v = document.createElement('video');
-        v.src = cinemaVideoSource(a.item, IS_TOUCH); v.muted = true; v.loop = true; v.playsInline = true;
+        // 벽에서는 작게 보이므로 PC에서도 가벼운 540p 파일을 쓴다. 원본은 극장·확대 보기에서만 재생한다.
+        v.src = cinemaVideoSource(a.item, true); v.muted = true; v.loop = true; v.playsInline = true;
         v.preload = 'auto'; v.crossOrigin = 'anonymous';
         v.addEventListener('loadedmetadata', () => {
           if (a.video === v) fitArtworkToAspect(a, v.videoWidth / v.videoHeight);
@@ -3247,9 +3250,31 @@ function updateVisitorTraces() {
       && player.pos.z <= traceBounds.zFrom - 0.1 && player.pos.z >= traceBounds.zTo + 0.1 });
 }
 
+// 관람 중 2초 동안 프레임의 절반 이상이 25ms(40fps)보다 느리면 해상도를 0.25배씩 낮춘다.
+// 사진을 불러올 때의 짧은 끊김은 과반이 되지 않으며, 한 번 낮춘 해상도는 다시 올리지 않는다.
+const frameCheck = { start: 0, last: 0, frames: 0, slow: 0 };
+function adaptResolution(now) {
+  if (!controlsActive || viewerOpen || document.hidden || renderer.getPixelRatio() <= 1) {
+    frameCheck.start = 0; return;
+  }
+  if (!frameCheck.start) Object.assign(frameCheck, { start: now, last: now, frames: 0, slow: 0 });
+  const frame = now - frameCheck.last;
+  frameCheck.last = now;
+  if (frame > 250) { frameCheck.start = 0; return; } // 탭 전환·알림창 같은 멈춤은 세지 않는다.
+  frameCheck.frames++;
+  if (frame > 25) frameCheck.slow++;
+  if (now - frameCheck.start < 2000) return;
+  if (frameCheck.slow * 2 > frameCheck.frames) {
+    pixelRatioCap = Math.max(1, renderer.getPixelRatio() - 0.25);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap));
+  }
+  frameCheck.start = 0;
+}
+
 const clock = new THREE.Clock();
 function loop() {
   requestAnimationFrame(loop);
+  adaptResolution(performance.now());
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePlayer(dt);
   updateChallenge();

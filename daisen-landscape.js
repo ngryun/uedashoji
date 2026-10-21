@@ -108,15 +108,20 @@ export function createDaisenLandscape({ scene, camera, zEnd, mobile }) {
     new THREE.ShaderMaterial({ uniforms: shared, defines: { CLOUD_DETAIL: mobile ? 0 : 1 },
       side: THREE.BackSide, depthWrite: false, toneMapped: false,
       vertexShader: `varying vec3 direction;
-        void main() { direction = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+        void main() {
+          direction = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+          gl_Position.z = gl_Position.w; // 가장 먼 깊이에 두어 아무것도 그려지지 않은 화면에만 칠한다.
+        }`,
       fragmentShader: `varying vec3 direction; ${landscapeGLSL}
         void main() {
           gl_FragColor = vec4(landscape(direction),1.0);
           #include <colorspace_fragment>
         }`,
     }));
-  sky.name = 'daisen-distant-sky'; sky.renderOrder = -20; sky.frustumCulled = false;
+  sky.name = 'daisen-distant-sky'; sky.renderOrder = 20; sky.frustumCulled = false;
   // 카메라를 따라가는 먼 배경은 창가에 다가가도 커지거나 평면의 끝이 드러나지 않는다.
+  // 불투명한 물체를 모두 그린 뒤 그려서 벽·지면에 가려진 픽셀은 하늘 셰이더를 계산하지 않는다.
   scene.add(sky);
 
   const poolZMin = zEnd - 10, poolZMax = 20, poolLength = poolZMax - poolZMin;
@@ -213,6 +218,8 @@ export function createDaisenLandscape({ scene, camera, zEnd, mobile }) {
     grass.setMatrixAt(i, transform.matrix);
   }
   group.add(grass);
+  // 바깥 풍경도 실내 뒤에 그려 벽에 가려진 픽셀은 깊이 검사로 건너뛴다.
+  for (const mesh of group.children) mesh.renderOrder = 10;
 
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   let elapsed = 0;

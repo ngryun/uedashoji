@@ -1267,6 +1267,12 @@ function buildMuseum(manifest) {
     signSide: 'left',
   });
 
+  openingBoxes.length = 0;
+  for (const o of stairways.map(stairOpening)) {
+    openingBoxes.push(new THREE.Box3(new THREE.Vector3(o.xMin, WALL_H - 0.1, o.zMin),
+      new THREE.Vector3(o.xMax, FLOOR_HEIGHT + 0.1, o.zMax)));
+  }
+
   /* ── 층별 바닥과 2층 슬래브 ── */
   for (const defs of floorDefs) {
     const yBase = defs[0].elevation;
@@ -1314,6 +1320,7 @@ function buildMuseum(manifest) {
     const yBase = def.elevation;
     const cz = (zFrom + zTo) / 2;
     const roomGroup = new THREE.Group();
+    const firstChild = scene.children.length;
     scene.add(roomGroup);
     def.group = roomGroup;
 
@@ -1373,6 +1380,7 @@ function buildMuseum(manifest) {
           roughness: 0.05, metalness: 0, side: THREE.DoubleSide }));
       glass.position.set(W / 2 + T / 2, yBase + (WALL_H - 0.6) / 2 + 0.6, cz);
       scene.add(glass);
+      windowBoxes.push(new THREE.Box3().setFromObject(glass));
       addCollider(W / 2 + T / 2, cz, T, L, def.floor);
       // 유리 멀리언(기둥)
       for (let i = 0; i <= 4; i++) {
@@ -1453,6 +1461,7 @@ function buildMuseum(manifest) {
             roughness: 0.05, metalness: 0, side: THREE.DoubleSide }));
         bayGlass.position.set(eastX, yBase + 0.75 + 2.65 / 2, bayCz);
         scene.add(bayGlass);
+        windowBoxes.push(new THREE.Box3().setFromObject(bayGlass));
         const posts = Math.max(2, Math.round(bayLen / 3.5));
         for (let i = 0; i <= posts; i++) {
           wallBox(eastX, yBase + WALL_H / 2, bayN + (bayLen / posts) * i, 0.12, WALL_H, 0.12,
@@ -1617,6 +1626,7 @@ function buildMuseum(manifest) {
       scene.add(sign);
     }
 
+    adoptRoomObjects(def, firstChild);
     rooms.push(def);
   }
 
@@ -1625,14 +1635,18 @@ function buildMuseum(manifest) {
     for (let i = 1; i < defs.length; i++) {
       const z = defs[i].zFrom;
       const w = Math.max(defs[i - 1].W, defs[i].W);
+      const firstChild = scene.children.length;
       dividerWall(z, -w / 2 - T, w / 2 + T,
         i === 1 && defs[i].floor === 0 && lobbyFinish
           ? lobbyFinish.concreteMaterial((w - DOOR_W) / 2, WALL_H)
           : concreteMat(w / 6, WALL_H / 4), defs[i].floor, defs[i].elevation);
+      adoptRoomObjects(defs[i], firstChild);
     }
     const last = defs[defs.length - 1];
+    const firstChild = scene.children.length;
     wallBox(0, last.elevation + WALL_H / 2, last.zTo - T / 2,
       last.W + T * 2, WALL_H, T, concreteMat(last.W / 4, WALL_H / 4), true, last.floor);
+    adoptRoomObjects(last, firstChild);
   }
 
   /* ── 자동 관람 전체 경로 ──
@@ -1669,7 +1683,9 @@ function buildMuseum(manifest) {
   );
 
   // 비밀의 방 챌린지(요나고역 9와 3/4승강장) — 시네마 동쪽 벽 뒤에 짓는다.
+  const secretFirstChild = scene.children.length;
   buildSecretEntrance(cinemaDef);
+  adoptRoomObjects(cinemaDef, secretFirstChild);
 }
 
 /* ═══════════════════ 플레이어 / 컨트롤 ═══════════════════ */
@@ -2911,6 +2927,43 @@ renderer?.domElement.addEventListener('click', () => {
   }
 });
 
+/* ═══════════════════ 가려진 층·바깥 풍경 생략 ═══════════════════ */
+// 다른 층은 슬래브에 가려 계단 개구부로만 보이고, 바깥 풍경은 유리창으로만 보인다.
+// 개구부·창이 시야(프러스텀) 안에 있을 때만 그린다. 벽에 가려진 경우까지 그리므로 빠지는 화면은 없다.
+const OPENING_REACH = 30;   // 개구부 너머로 보일 수 있는 다른 층의 거리(m)
+const openingBoxes = [];    // 계단 개구부 (층 사이 슬래브 높이)
+const windowBoxes = [];     // 바깥 풍경이 보이는 유리창
+const viewFrustum = new THREE.Frustum();
+const viewProjection = new THREE.Matrix4();
+
+// 방을 짓는 동안 장면에 직접 추가한 요소를 방 그룹으로 옮겨 층 단위로 숨길 수 있게 한다.
+// 방 그룹은 원점에 있으므로 위치는 바뀌지 않는다. 창밖 풍경은 모든 층에서 보이므로 남겨 둔다.
+function adoptRoomObjects(def, firstChild) {
+  const keep = new Set([def.group, daisenLandscape?.group, daisenLandscape?.sky]);
+  for (const obj of scene.children.slice(firstChild)) if (!keep.has(obj)) def.group.add(obj);
+}
+
+function updateHiddenAreas() {
+  camera.updateMatrixWorld();
+  viewFrustum.setFromProjectionMatrix(
+    viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  const onStairs = stairProgressAt(player.pos.x, player.pos.z) !== null;
+  // 비밀 통로는 발판 아래 옆면이 트여 있어 1층 외벽과 하늘이 보인다.
+  const b = challenge.bounds;
+  const inSecret = !!b && player.floor === 1 && player.pos.x < b.wallX
+    && player.pos.z > b.zS - 0.5 && player.pos.z < b.zN + 0.5;
+  const openings = openingBoxes.filter(box => onStairs || viewFrustum.intersectsBox(box));
+  for (const room of rooms) {
+    room.group.visible = inSecret || room.floor === player.floor || openings.some(box =>
+      room.zTo < box.max.z + OPENING_REACH && room.zFrom > box.min.z - OPENING_REACH);
+  }
+  if (daisenLandscape) {
+    const outside = inSecret || windowBoxes.some(box => viewFrustum.intersectsBox(box));
+    daisenLandscape.group.visible = outside;
+    daisenLandscape.sky.visible = outside;
+  }
+}
+
 /* ═══════════════════ 룸 매니저 (지연 로딩/컬링/비디오) ═══════════════════ */
 let currentRoomIdx = 0;
 function roomIndexAt(z, floor) {
@@ -3285,7 +3338,10 @@ function loop() {
   if (secretProjectionCtl) secretProjectionCtl.update();
   guestbookScreen?.update(dt, player, controlsActive && !viewerOpen);
   daisenLandscape?.update(dt, controlsActive);
-  if (!viewerOpen) renderer.render(scene, camera); // 집중 감상 중에는 영상 재생에 GPU 여유를 준다.
+  if (!viewerOpen) { // 집중 감상 중에는 영상 재생에 GPU 여유를 준다.
+    updateHiddenAreas();
+    renderer.render(scene, camera);
+  }
 }
 
 init();
@@ -3314,5 +3370,6 @@ window.__m = { player, rooms, artworks, keys, joy, drag, renderer, scene, camera
     camera.position.copy(player.pos);
     camera.rotation.set(player.pitch, player.yaw, 0);
     daisenLandscape?.update(0);
+    updateHiddenAreas();
     renderer.render(scene, camera);
   } };
